@@ -621,7 +621,7 @@ export default function ReviewDetails() {
 
   // Passport conditions based on Conditions.pcs:
   // If pcs is NOT null:
-  // - pm: true -> passport details required; pm: false -> optional
+  // - pm: true -> passport details shown and required; pm: false -> passport details should NOT be shown
   // - pped: true -> passport expiry date required / shown
   // - pid: true -> passport issued date required / shown
   // If pcs is null/undefined: maintain current behavior (based on isIntl)
@@ -637,7 +637,8 @@ export default function ReviewDetails() {
     ? Boolean(pcsConditions.pped ?? pcsConditions.Pped ?? false)
     : isIntl;
 
-  const isPassportSectionVisible = hasPcs ? true : isIntl;
+  // If pm is false inside pcs, passport details should not be shown to fill
+  const isPassportSectionVisible = isPassportRequired;
 
   // Derive traveller limits from API / filter / bookingStore
   const TotalTravellers = useMemo(() => {
