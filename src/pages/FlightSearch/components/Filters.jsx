@@ -5,12 +5,22 @@ import Sunnyday from '@/assets/vectors/sunnyday.svg';
 import Afternoon from '@/assets/vectors/afternoon.svg';
 import Night from '@/assets/vectors/night.svg';
 import { useFlightFilters } from '@/contexts/FlightFilterContext';
+import { useAuth } from '@/contexts/AuthContext';
+import { getFlightDisplayPrice } from '@/utils/fareCalculations';
+import { getFlightStops, formatStopsLabel, formatFlightStops, isSpecialRoundTripFlight, getSpecialRoundTripLegGroups } from '@/utils/flightStops';
+
+const TimeRanges = {
+    "Early Morning": { start: 0, end: 6 },
+    "Morning": { start: 6, end: 12 },
+    "Afternoon": { start: 12, end: 18 },
+    "Night": { start: 18, end: 24 },
+};
 
 const PopularFilters = [
     { label: 'Non Stop', price: 5500 },
     { label: 'Hide Nearby Airports', price: 4200 },
     { label: 'Refundable Fares', price: 4240 },
-    { label: 'Indigo', },
+    { label: 'Indigo' },
     { label: 'Morning Flights', price: 4800 },
     { label: 'Evening Flights', price: 4600 },
     { label: 'Direct Airlines Only', price: 5300 },
@@ -18,7 +28,23 @@ const PopularFilters = [
     { label: 'Free Meal Included' },
 ];
 
-function Filters({ filters, origin, destination, filterState: externalState, filterDispatch: externalDispatch, label, showShadow = true }) {
+function Filters({
+    flights = [],
+    filters,
+    origin,
+    destination,
+    filterState: externalState,
+    filterDispatch: externalDispatch,
+    label,
+    showShadow = true,
+    isMobileDrawer = false,
+    isSpecialRoundTrip = false,
+    isRoundTrip = false,
+}) {
+
+    const { user, isB2B: authIsB2B } = useAuth();
+    const userType = (user?.UserType || user?.userType || user?.Role || user?.role || "").toLowerCase();
+    const isB2B = authIsB2B || userType === "b2b";
 
     const ctx = useFlightFilters();
     const state = externalState ?? ctx.state;
@@ -35,6 +61,81 @@ function Filters({ filters, origin, destination, filterState: externalState, fil
 
     const stopsList = filters?.totalStops || [];
     const airlinesList = filters?.airlines || [];
+
+    useEffect(() => {
+        if (stopsList && stopsList.length > 0) {
+            console.log(`📌 [Filters Component] Section: "Stops From ${origin || 'Origin'}"`, {
+                header: isSpecialRoundTrip || isRoundTrip
+                    ? (origin && destination ? `Stops from ${origin}-${destination}-${origin}` : origin ? `Stops From ${origin}` : "Stops")
+                    : (origin ? `Stops From ${origin}` : "Stops"),
+                rawStopsList: stopsList,
+                renderedOptions: stopsList.map((stop) => formatStopsLabel(stop))
+            });
+        }
+    }, [stopsList, origin, destination, isSpecialRoundTrip, isRoundTrip]);
+
+    const dynamicAirlineCounts = useMemo(() => {
+        if (!flights || flights.length === 0) return null;
+        const counts = {};
+
+        flights.forEach((flight) => {
+            const lowestFare = getFlightDisplayPrice(flight);
+            const depHour = Number(flight.DepartureTime?.split(":")[0]) || 0;
+
+            let arrTimeStr = flight.ArrivalTime;
+            if (isSpecialRoundTrip || isSpecialRoundTripFlight(flight)) {
+                const { onwardLegs } = getSpecialRoundTripLegGroups(flight);
+                if (onwardLegs.length > 0) {
+                    arrTimeStr = onwardLegs[onwardLegs.length - 1].ArrivalTime || arrTimeStr;
+                }
+            }
+            const arrHour = Number(arrTimeStr?.split(":")[0]) || 0;
+
+            // Check stops
+            if (state.selectedStops?.length > 0) {
+                const stopLabel = formatFlightStops(flight, isSpecialRoundTrip || isSpecialRoundTripFlight(flight));
+                if (!state.selectedStops.includes(stopLabel)) return;
+            }
+
+            // Check price
+            if (state.selectedPriceRange?.length === 2 && lowestFare > 0) {
+                const [min, max] = state.selectedPriceRange;
+                if (lowestFare < min || lowestFare > max) return;
+            }
+
+            // Check departure time
+            if (state.selectedDepartureTime) {
+                const range = TimeRanges[state.selectedDepartureTime];
+                if (range && (depHour < range.start || depHour >= range.end)) return;
+            }
+
+            // Check arrival time
+            if (state.selectedArrivalTime) {
+                const range = TimeRanges[state.selectedArrivalTime];
+                if (range && (arrHour < range.start || arrHour >= range.end)) return;
+            }
+
+            // Collect all unique airline codes for this flight
+            const flightAirlineCodes = new Set();
+            if (Array.isArray(flight.AirlineLogo)) {
+                flight.AirlineLogo.forEach((c) => { if (c) flightAirlineCodes.add(c.trim().toUpperCase()); });
+            }
+            if (Array.isArray(flight.FlightDetailResponses)) {
+                flight.FlightDetailResponses.forEach((leg) => {
+                    const c = leg.AirlineCode || leg.airlineCode;
+                    if (c) flightAirlineCodes.add(c.trim().toUpperCase());
+                });
+            }
+            const primaryCode = flight.AirlineCodeAndId?.split("-")[0] || flight.AirlineCode || "";
+            if (primaryCode) flightAirlineCodes.add(primaryCode.trim().toUpperCase());
+
+            flightAirlineCodes.forEach((code) => {
+                counts[code] = (counts[code] || 0) + 1;
+            });
+        });
+
+        return counts;
+    }, [flights, state.selectedStops, state.selectedPriceRange, state.selectedDepartureTime, state.selectedArrivalTime, isSpecialRoundTrip]);
 
     const [value, setValue] = useState(maxValue);
 
@@ -56,7 +157,6 @@ function Filters({ filters, origin, destination, filterState: externalState, fil
         let newValue = minValue + (maxValue - minValue) * percentage;
 
         newValue = Math.round(newValue / 100) * 100;
-
         newValue = Math.max(minValue, Math.min(newValue, maxValue));
 
         setPrevValue(value);
@@ -97,14 +197,15 @@ function Filters({ filters, origin, destination, filterState: externalState, fil
             type: "SET_PRICE_RANGE",
             payload: [minValue, value],
         });
-    }, [value, dispatch]);
+    }, [value, dispatch, minValue]);
 
     const percentage = maxValue === minValue ? 0 : ((value - minValue) / (maxValue - minValue)) * 100;
 
-    const toggleStopFilter = (label) => {
-        const newStops = state.selectedStops.includes(label)
-            ? state.selectedStops.filter(f => f !== label)
-            : [...state.selectedStops, label];
+    const toggleStopFilter = (lbl) => {
+        const currentStops = state.selectedStops || [];
+        const newStops = currentStops.includes(lbl)
+            ? currentStops.filter(f => f !== lbl)
+            : [...currentStops, lbl];
 
         dispatch({
             type: "SET_STOPS",
@@ -125,17 +226,6 @@ function Filters({ filters, origin, destination, filterState: externalState, fil
         });
     };
 
-    // const toggleAircraftFilter = (label) => {
-    //     const newAircraftSizes = state.selectedAircraftSizes.includes(label)
-    //         ? state.selectedAircraftSizes.filter(size => size !== label)
-    //         : [...state.selectedAircraftSizes, label];
-
-    //     dispatch({
-    //         type: "SET_AIRCRAFT_SIZES",
-    //         payload: newAircraftSizes,
-    //     });
-    // };
-
     const clearAllFilters = () => {
         dispatch({ type: "RESET_FILTERS" });
         setValue(maxValue);
@@ -143,26 +233,26 @@ function Filters({ filters, origin, destination, filterState: externalState, fil
     };
 
     const selected = [
-        ...state.selectedStops,
-        ...state.selectedAircraftSizes,
+        ...(state.selectedStops || []),
+        ...(state.selectedAircraftSizes || []),
         departureAirport,
         state.selectedDepartureTime,
         state.selectedArrivalTime,
-        ...state.selectedAirlines.map(a => a.name)
+        ...(state.selectedAirlines || []).map(a => a.name)
     ].filter(Boolean);
 
     const removeFilter = (filter) => {
-        if (state.selectedStops.includes(filter)) {
+        if (state.selectedStops?.includes(filter)) {
             dispatch({
                 type: "SET_STOPS",
                 payload: state.selectedStops.filter(f => f !== filter),
             });
-        } else if (state.selectedAirlines.some(a => a.name === filter)) {
+        } else if (state.selectedAirlines?.some(a => a.name === filter)) {
             dispatch({
                 type: "SET_AIRLINES",
                 payload: state.selectedAirlines.filter(a => a.name !== filter),
             });
-        } else if (state.selectedAircraftSizes.includes(filter)) {
+        } else if (state.selectedAircraftSizes?.includes(filter)) {
             dispatch({
                 type: "SET_AIRCRAFT_SIZES",
                 payload: state.selectedAircraftSizes.filter(s => s !== filter),
@@ -175,107 +265,76 @@ function Filters({ filters, origin, destination, filterState: externalState, fil
     };
 
     return (
-        <>
-            <div
-                className="w-70 bg-[#D5D5D5] rounded-lg shadow-sm px-6 pb-6 pt-3 h-fit filters"
-                style={{
-                    boxShadow: showShadow
-                        ? '0px 3px 22.3px 10px rgba(0,0,0,0.2), 0px 4px 6.1px 4px rgba(0,0,0,0.25)'
-                        : 'none'
-                }}
-            >
+        <div
+            className={`${isMobileDrawer ? 'w-full bg-transparent px-1 pb-6 pt-1' : 'w-full bg-[#D5D5D5] rounded-lg shadow-sm px-6 pb-6 pt-3'} h-fit filters`}
+            style={{
+                boxShadow: (!isMobileDrawer && showShadow)
+                    ? '0px 3px 22.3px 10px rgba(0,0,0,0.2), 0px 4px 6.1px 4px rgba(0,0,0,0.25)'
+                    : 'none'
+            }}
+        >
+            <div className="flex items-center justify-between mb-6">
+                <h3 className="text-base font-semibold">{label || 'Applied Filters'}</h3>
+                <button className="cursor-pointer text-[#78080B] text-xs font-medium hover:underline" onClick={clearAllFilters}>CLEAR ALL</button>
+            </div>
 
-                <div className="flex items-center justify-between mb-6">
-                    <h3 className="text-base font-semibold ">{label || 'Applied Filters'}</h3>
-                    <button className="cursor-pointer text-[#78080B] text-xs font-medium hover:underline" onClick={clearAllFilters}>CLEAR ALL</button>
+            {/* B2B Agent Filter Checkbox */}
+            {isB2B && (
+                <div className="mb-6 text-sm">
+                    <label className="flex items-center justify-between cursor-pointer select-none">
+                        <span className="flex items-center">
+                            <input
+                                type="checkbox"
+                                checked={!!state.showFareBreakdown}
+                                onChange={(e) => dispatch({
+                                    type: "SET_SHOW_FARE_BREAKDOWN",
+                                    payload: e.target.checked
+                                })}
+                                className="mr-3 cursor-pointer accent-red-600"
+                            />
+                            Show Net Price And Incv.
+                        </span>
+                    </label>
                 </div>
+            )}
 
-                {/* Applied Filter Tags */}
-                {selected.length > 0 && (
-                    <div className="mb-6">
-                        <div className="flex flex-wrap gap-2 mb-2">
-                            {selected.map((filter) => {
-                                let Icon = null;
+            {/* Applied Filter Tags */}
+            {selected.length > 0 && (
+                <div className="mb-6">
+                    <div className="flex flex-wrap gap-2 mb-2">
+                        {selected.map((filter) => {
+                            let Icon = null;
 
-                                if (filter === state.selectedDepartureTime) Icon = PlaneTakeoff;
-                                else if (filter === state.selectedArrivalTime) Icon = PlaneLanding;
+                            if (filter === state.selectedDepartureTime) Icon = PlaneTakeoff;
+                            else if (filter === state.selectedArrivalTime) Icon = PlaneLanding;
 
-                                return (
-                                    <span
-                                        key={filter}
-                                        className="bg-white text-black px-3 py-1 rounded-full font-medium text-xs flex items-center"
-                                        style={{ boxShadow: '0px 4px 4px rgba(0, 0, 0, 0.25)' }}
+                            return (
+                                <span
+                                    key={filter}
+                                    className="bg-white text-black px-3 py-1 rounded-full font-medium text-xs flex items-center"
+                                    style={{ boxShadow: '0px 4px 4px rgba(0, 0, 0, 0.25)' }}
+                                >
+                                    {Icon && <Icon className="mr-1" size={14} />}
+                                    {filter}
+                                    <button
+                                        onClick={() => removeFilter(filter)}
+                                        className="cursor-pointer ml-2 text-white bg-[#910E0E] w-4 h-4 rounded-full flex items-center justify-center"
                                     >
-                                        {Icon && <Icon className="mr-1" size={14} />}
-                                        {filter}
-                                        <button
-                                            onClick={() => removeFilter(filter)}
-                                            className="cursor-pointer ml-2 text-white bg-[#910E0E] w-4 h-4 rounded-full flex items-center justify-center"
-                                        >
-                                            <X size={12} strokeWidth={3} />
-                                        </button>
-                                    </span>
-                                );
-                            })}
-                        </div>
-                    </div>
-                )}
-
-
-
-                {/* Popular Filters */}
-                {/* <div className="mb-8">
-                    <h4 className="font-semibold mb-4">Popular Filters</h4>
-                    <div className="space-y-3 text-sm">
-                        {visibleFilters.map(({ label, price }) => (
-                            <label key={label} className="flex items-center justify-between">
-                                <span className="flex items-center">
-                                    <input
-                                        type="checkbox"
-                                        className="mr-3 cursor-pointer accent-red-600"
-                                        readOnly
-                                    />
-                                    {label}
+                                        <X size={12} strokeWidth={3} />
+                                    </button>
                                 </span>
-                                {price && <span>₹ {price.toLocaleString()}</span>}
-                            </label>
-                        ))}
-                        {!showAll && remainingCount > 0 && (
-                            <button onClick={() => setShowAll(true)}
-                                className="cursor-pointer text-[#78080B] font-medium hover:underline">
-                                + {remainingCount} more
-                            </button>
-                        )}
+                            );
+                        })}
                     </div>
+                </div>
+            )}
 
-                </div> */}
-
-                {/* Departure Airports */}
-                {/* <div className="mb-8">
-                    <h4 className="font-semibold mb-4">Departure Airports</h4>
-                    <div className="space-y-3 text-sm">
-                        {DepartureAirports.map(({ label, price }) => (
-                            <div key={label} className="flex justify-between items-start w-full">
-                                <label className="flex items-start gap-3 flex-1">
-                                    <input
-                                        type="checkbox"
-                                        checked={departureAirport === label}
-                                        onChange={() =>
-                                            setDepartureAirport(departureAirport === label ? null : label)
-                                        }
-                                        className="mt-1 cursor-pointer accent-red-600"
-                                    />
-                                    <span>{label}</span>
-                                </label>
-                                {price && <span className="ml-3 flex-shrink-0">₹ {price.toLocaleString()}</span>}
-                            </div>
-                        ))}
-                    </div>
-                </div> */}
-
-                {/* Price Slider */}
+            {/* Price Slider */}
+            {maxValue > 0 && (
                 <div className="mb-8">
-                    <h4 className="text-sm font-semibold mb-4">One Way Price</h4>
+                    <h4 className="text-sm font-semibold mb-4">
+                        {isSpecialRoundTrip || isRoundTrip ? 'Round Trip Price' : 'One Way Price'}
+                    </h4>
                     <div
                         className="relative h-1 bg-[#B9B9B9] rounded-sm cursor-pointer select-none"
                         ref={sliderRef}
@@ -308,154 +367,141 @@ function Filters({ filters, origin, destination, filterState: externalState, fil
                         <span>₹ {maxValue.toLocaleString()}</span>
                     </div>
                 </div>
+            )}
 
-                {/* Stops */}
+            {/* Stops */}
+            {stopsList && stopsList.length > 0 && (
                 <div className="mb-8">
-                    <h4 className="text-sm font-semibold mb-4">Stops From Delhi</h4>
+                    <h4 className="text-sm font-semibold mb-4">
+                        {isSpecialRoundTrip || isRoundTrip
+                            ? (origin && destination ? `Stops from ${origin}-${destination}-${origin}` : origin ? `Stops From ${origin}` : 'Stops')
+                            : (origin ? `Stops From ${origin}` : 'Stops')}
+                    </h4>
                     <div className="space-y-3 text-sm">
                         {stopsList.map((stop) => {
-                            const label =
-                                stop === 0 ? "Non Stop"
-                                    : stop === 1 ? "1 Stop"
-                                        : `${stop} Stops`;
+                            const lbl = formatStopsLabel(stop);
 
                             return (
-                                <label key={stop} className="flex items-center justify-between">
+                                <label key={lbl} className="flex items-center justify-between">
                                     <span className="flex items-center">
                                         <input
                                             type="checkbox"
-                                            checked={state.selectedStops.includes(label)}
-                                            onChange={() => toggleStopFilter(label)}
+                                            checked={state.selectedStops?.includes(lbl)}
+                                            onChange={() => toggleStopFilter(lbl)}
                                             className="mr-3 cursor-pointer accent-red-600"
                                         />
-                                        {label}
+                                        {lbl}
                                     </span>
                                 </label>
                             );
                         })}
                     </div>
                 </div>
+            )}
 
-
-                {/* Departure Times */}
-                <div className="mb-8">
-                    <h4 className="text-sm font-semibold mb-4">Departure From {origin}</h4>
-                    <div className="flex flex-row justify-around gap-1 flex-wrap">
-                        {[
-                            { label: "Early Morning", icon: Sunrise, lines: ["Before", "6 AM"] },
-                            { label: "Morning", icon: Sunnyday, lines: ["6 AM", "to 12 PM"] },
-                            { label: "Afternoon", icon: Afternoon, lines: ["12 PM", "to 6 PM"] },
-                            { label: "Night", icon: Night, lines: ["After", "6 PM"] }
-                        ].map(({ label, icon, lines }) => (
-                            <div
-                                key={label}
-                                onClick={() => dispatch({
-                                    type: "SET_DEPARTURE_TIME",
-                                    payload: state.selectedDepartureTime === label ? null : label,
-                                })}
-                                className="cursor-pointer text-center flex flex-col items-center hover:opacity-80"
-                            >
-                                <div className={`w-10 h-10 rounded-full p-2 flex items-center justify-center mb-2 transition-colors duration-200 ${state.selectedDepartureTime === label ? 'bg-[#78080B]' : 'border-[#B5B5B5] border-2 border-solid'}`}>
-                                    <img
-                                        src={icon}
-                                        alt={label}
-                                        className={state.selectedDepartureTime === label ? 'filter invert brightness-0' : ''}
-                                    />
-                                </div>
-                                <div className="text-xs font-medium text-center">
-                                    {lines.map((line, idx) => (
-                                        <p key={idx}>{line}</p>
-                                    ))}
-                                </div>
+            {/* Departure Times */}
+            <div className="mb-8">
+                <h4 className="text-sm font-semibold mb-4">
+                    {origin ? `Departure From ${origin}` : 'Departure Time'}
+                </h4>
+                <div className="flex flex-row justify-around gap-1 flex-wrap">
+                    {[
+                        { label: "Early Morning", icon: Sunrise, lines: ["Before", "6 AM"] },
+                        { label: "Morning", icon: Sunnyday, lines: ["6 AM", "to 12 PM"] },
+                        { label: "Afternoon", icon: Afternoon, lines: ["12 PM", "to 6 PM"] },
+                        { label: "Night", icon: Night, lines: ["After", "6 PM"] }
+                    ].map(({ label: timeLabel, icon, lines }) => (
+                        <div
+                            key={timeLabel}
+                            onClick={() => dispatch({
+                                type: "SET_DEPARTURE_TIME",
+                                payload: state.selectedDepartureTime === timeLabel ? null : timeLabel,
+                            })}
+                            className="cursor-pointer text-center flex flex-col items-center hover:opacity-80"
+                        >
+                            <div className={`w-10 h-10 rounded-full p-2 flex items-center justify-center mb-2 transition-colors duration-200 ${state.selectedDepartureTime === timeLabel ? 'bg-[#78080B]' : 'border-[#B5B5B5] border-2 border-solid'}`}>
+                                <img
+                                    src={icon}
+                                    alt={timeLabel}
+                                    className={state.selectedDepartureTime === timeLabel ? 'filter invert brightness-0' : ''}
+                                />
                             </div>
-                        ))}
-                    </div>
-
-                </div>
-
-
-                {/* Arrival Times*/}
-                <div className="mb-8">
-                    <h4 className="text-sm font-semibold mb-4">Arrival at {destination}</h4>
-                    <div className="flex flex-row justify-around gap-1 flex-wrap">
-                        {[
-                            { label: "Early Morning", icon: Sunrise, lines: ["Before", "6 AM"] },
-                            { label: "Morning", icon: Sunnyday, lines: ["6 AM", "to 12 PM"] },
-                            { label: "Afternoon", icon: Afternoon, lines: ["12 PM", "to 6 PM"] },
-                            { label: "Night", icon: Night, lines: ["After", "6 PM"] }
-                        ].map(({ label, icon, lines }) => (
-                            <div
-                                key={label}
-                                onClick={() => dispatch({
-                                    type: "SET_ARRIVAL_TIME",
-                                    payload: state.selectedArrivalTime === label ? null : label,
-                                })}
-                                className="cursor-pointer text-center flex flex-col items-center hover:opacity-80">
-                                <div className={`w-10 h-10 rounded-full p-2 flex items-center justify-center mb-2 transition-colors duration-200 ${state.selectedArrivalTime === label ? 'bg-[#78080B]' : 'border-[#B5B5B5] border-2 border-solid'}`}>
-                                    <img
-                                        src={icon}
-                                        alt={label}
-                                        className={state.selectedArrivalTime === label ? 'filter invert brightness-0' : ''}
-                                    />
-                                </div>
-                                <div className="text-xs font-medium text-center">
-                                    {lines.map((line, idx) => (
-                                        <div key={idx}>{line}</div>
-                                    ))}
-                                </div>
+                            <div className="text-xs font-medium text-center">
+                                {lines.map((line, idx) => (
+                                    <p key={idx}>{line}</p>
+                                ))}
                             </div>
-                        ))}
-                    </div>
-
+                        </div>
+                    ))}
                 </div>
+            </div>
 
-                {/* Airlines */}
+            {/* Arrival Times*/}
+            <div className="mb-8">
+                <h4 className="text-sm font-semibold mb-4">
+                    {destination ? `Arrival at ${destination}` : 'Arrival Time'}
+                </h4>
+                <div className="flex flex-row justify-around gap-1 flex-wrap">
+                    {[
+                        { label: "Early Morning", icon: Sunrise, lines: ["Before", "6 AM"] },
+                        { label: "Morning", icon: Sunnyday, lines: ["6 AM", "to 12 PM"] },
+                        { label: "Afternoon", icon: Afternoon, lines: ["12 PM", "to 6 PM"] },
+                        { label: "Night", icon: Night, lines: ["After", "6 PM"] }
+                    ].map(({ label: timeLabel, icon, lines }) => (
+                        <div
+                            key={timeLabel}
+                            onClick={() => dispatch({
+                                type: "SET_ARRIVAL_TIME",
+                                payload: state.selectedArrivalTime === timeLabel ? null : timeLabel,
+                            })}
+                            className="cursor-pointer text-center flex flex-col items-center hover:opacity-80">
+                            <div className={`w-10 h-10 rounded-full p-2 flex items-center justify-center mb-2 transition-colors duration-200 ${state.selectedArrivalTime === timeLabel ? 'bg-[#78080B]' : 'border-[#B5B5B5] border-2 border-solid'}`}>
+                                <img
+                                    src={icon}
+                                    alt={timeLabel}
+                                    className={state.selectedArrivalTime === timeLabel ? 'filter invert brightness-0' : ''}
+                                />
+                            </div>
+                            <div className="text-xs font-medium text-center">
+                                {lines.map((line, idx) => (
+                                    <div key={idx}>{line}</div>
+                                ))}
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            </div>
+
+            {/* Airlines */}
+            {airlinesList && airlinesList.length > 0 && (
                 <div className="mb-8">
                     <h4 className="text-sm font-semibold mb-4">Airlines</h4>
                     <div className="space-y-3 text-sm">
-                        {airlinesList.map((airline) => (
-                            <label key={airline.code} className="flex items-center justify-between">
-                                <span className="flex items-center">
-                                    <input
-                                        type="checkbox"
-                                        checked={state.selectedAirlines.some(a => a.code === airline.code)}
-                                        onChange={() => toggleAirlineFilter(airline)}
-                                        className="mr-3 cursor-pointer accent-red-600"
-                                    />
-                                    {airline.name || airline.code}
-                                </span>
-                                {airline.count != null && (
-                                    <span className="text-xs text-gray-500 ml-2">({airline.count})</span>
-                                )}
-                            </label>
-                        ))}
+                        {airlinesList.map((airline) => {
+                            const displayCount = dynamicAirlineCounts
+                                ? (dynamicAirlineCounts[airline.code] ?? 0)
+                                : (airline.count ?? 0);
+
+                            return (
+                                <label key={airline.code} className="flex items-center justify-between">
+                                    <span className="flex items-center">
+                                        <input
+                                            type="checkbox"
+                                            checked={state.selectedAirlines?.some(a => a.code === airline.code)}
+                                            onChange={() => toggleAirlineFilter(airline)}
+                                            className="mr-3 cursor-pointer accent-red-600"
+                                        />
+                                        {airline.name || airline.code}
+                                    </span>
+                                    <span className="text-xs text-gray-500 ml-2">({displayCount})</span>
+                                </label>
+                            );
+                        })}
                     </div>
                 </div>
-
-                {/* Aircraft Size */}
-                {/* <div className="mb-8">
-                    <h4 className="font-semibold mb-4">Aircraft Size</h4>
-                    <div className="space-y-3 text-sm">
-                        {AircraftSize.map(({ label, price }) => (
-                            <div key={label} className="flex justify-between items-start w-full">
-                                <label className="flex items-start gap-3 flex-1">
-                                    <input
-                                        type="checkbox"
-                                        checked={state.selectedAircraftSizes.includes(label)}
-                                        onChange={() => toggleAircraftFilter(label)}
-                                        className="mt-1 cursor-pointer accent-red-600"
-                                    />
-                                    <span>{label}</span>
-                                </label>
-                                {price && <span className="ml-3 flex-shrink-0">₹ {price.toLocaleString()}</span>}
-                            </div>
-                        ))}
-                    </div>
-                </div> */}
-            </div >
-
-        </>
-    )
+            )}
+        </div>
+    );
 }
 
-export default Filters
+export default Filters;

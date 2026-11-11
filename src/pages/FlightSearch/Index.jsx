@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback, useReducer } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ChevronUp } from 'lucide-react';
+import { ChevronUp, X, SlidersHorizontal } from 'lucide-react';
 import FlightSearchTopHeader from './components/FlightSearchTopHeader.jsx';
 import FlightSearchHeader from './components/FlightSearchHeader.jsx';
 import FlightSearchHeaderMobile from './components/FlightSearchHeaderMobile.jsx';
@@ -23,11 +23,13 @@ import { useInfiniteFlights } from '@/hooks/FlightSearch/useInfiniteFlights.js';
 import { useScrollTop } from '@/hooks/FlightSearch/useScrollTop.js';
 import { bookingStore } from '@/store/bookingStore.js';
 import RoundTripFlightRow from './components/RoundTripFlightRow.jsx';
+import { getFlightDisplayPrice } from '@/utils/fareCalculations';
+import { getFlightStops, getSpecialRoundTripStops, formatSpecialRoundTripStopsLabel, isSpecialRoundTripFlight } from '@/utils/flightStops';
 
 export default function FlightSearch() {
 
     const navigate = useNavigate();
-    const { state: filters } = useFlightFilters();
+    const { state: filters, dispatch: globalFilterDispatch } = useFlightFilters();
     const [selectedSorting, setSelectedSorting] = useState("");
 
     // ── Independent filter reducers for round-trip ──────────────────────────
@@ -38,7 +40,9 @@ export default function FlightSearch() {
         selectedPriceRange: [0, Infinity],
         selectedDepartureTime: null,
         selectedArrivalTime: null,
+        showFareBreakdown: false,
     };
+
     function filterReducer(state, action) {
         switch (action.type) {
             case "SET_STOPS": return { ...state, selectedStops: action.payload };
@@ -47,6 +51,8 @@ export default function FlightSearch() {
             case "SET_DEPARTURE_TIME": return { ...state, selectedDepartureTime: action.payload };
             case "SET_ARRIVAL_TIME": return { ...state, selectedArrivalTime: action.payload };
             case "SET_AIRCRAFT_SIZES": return { ...state, selectedAircraftSizes: action.payload };
+            case "SET_SHOW_FARE_BREAKDOWN": return { ...state, showFareBreakdown: action.payload };
+            case "TOGGLE_SHOW_FARE_BREAKDOWN": return { ...state, showFareBreakdown: !state.showFareBreakdown };
             case "RESET_FILTERS": return filterInitialState;
             default: return state;
         }
@@ -56,11 +62,8 @@ export default function FlightSearch() {
     // ───────────────────────────────────────────────────────────────────────
 
     const [isFilterOpen, setIsFilterOpen] = useState(false);
-
     const [collapsed, setCollapsed] = useState(false);
-
     const [selectedFlightId, setSelectedFlightId] = useState(null);
-
     const [progress, setProgress] = useState(0);
 
     const { state: compareState, dispatch } = useCompareFlights();
@@ -68,7 +71,6 @@ export default function FlightSearch() {
 
     const [isSignInModal, setIsSignInModal] = useState(false);
     const [isFlightDetailsModalOpen, setIsFlightDetailsModalOpen] = useState(false);
-    // Holds { flight, fareList } so the modal can persist both to bookingStore
     const [flightDetailsModalCtx, setFlightDetailsModalCtx] = useState(null);
 
     // Round-trip independent selection
@@ -76,20 +78,38 @@ export default function FlightSearch() {
     const [selectedReturn, setSelectedReturn] = useState(null);
 
     const [showOtherMenu, setShowOtherMenu] = useState(false);
-
     const [showMobileSearch, setShowMobileSearch] = useState(false);
 
-    const { apiFlights, apiFlightAirlines, apiReturnFlights, apiReturnAirlines, isLoading, isError, payload } = useFlightSearch();
+    const { apiFlights, apiFlightAirlines, apiReturnFlights, apiReturnAirlines, isLoading, isError, payload, isValidSearch, isFetched } = useFlightSearch();
 
-    const isRoundTrip = payload.TripInfo.length > 1;
+    const searchKey = `${payload?.TripInfo?.[0]?.Origin || ''}_${payload?.TripInfo?.[0]?.Destination || ''}_${payload?.TripInfo?.[0]?.TravelDate || ''}_${payload?.TripInfo?.[1]?.TravelDate || ''}_${payload?.BookingType ?? ''}`;
 
-    // For round trip: both arrays are independent — no zipping or merging.
-    // One-way pipeline uses apiFlights as-is; round-trip renders rows by index directly.
+    useEffect(() => {
+        // Reset all filters and selections when route, dates, or search type changes
+        globalFilterDispatch({ type: "RESET_FILTERS" });
+        outboundFilterDispatch({ type: "RESET_FILTERS" });
+        returnFilterDispatch({ type: "RESET_FILTERS" });
+        setSelectedOutbound(null);
+        setSelectedReturn(null);
+        setSelectedFlightId(null);
+        setRoundTripFilterTab("both");
+    }, [searchKey, globalFilterDispatch]);
+
+    const isSpecialRoundTrip = useMemo(() => {
+        if (payload?.BookingType === 2) return true;
+        if (apiFlights && apiFlights.length > 0) {
+            return apiFlights.some(f => isSpecialRoundTripFlight(f));
+        }
+        return false;
+    }, [payload?.BookingType, apiFlights]);
+
+    // Split 2-column round trip selection is only active when it's NOT a special/bundled round trip
+    const isRoundTrip = (payload?.TripInfo?.length || 0) > 1 && payload?.BookingType === 1 && !isSpecialRoundTrip;
+
     const flightsForFilter = useMemo(() => {
-        if (isRoundTrip) return []; // round-trip rows are rendered separately below
+        if (isRoundTrip) return [];
         return apiFlights;
     }, [isRoundTrip, apiFlights]);
-
 
     const FlightDetails = useFilteredFlights({
         flights: flightsForFilter,
@@ -101,25 +121,78 @@ export default function FlightSearch() {
     const { showScrollTop, scrollToTop } = useScrollTop();
 
     const filterParams = useMemo(() => {
-        const prices = apiFlights.map(f => f.AirlineMinNetPrice);
-        return {
-            minPrice: prices.length ? Math.min(...prices) : 0,
-            maxPrice: prices.length ? Math.max(...prices) : 0,
-            totalStops: [...new Set(apiFlights.map(f => f.AirlineStops))],
-            airlines: apiFlightAirlines.map(f => ({
+        const prices = apiFlights.map(f => getFlightDisplayPrice(f));
+
+        let totalStops;
+        if (isSpecialRoundTrip) {
+            const stopMap = new Map();
+            apiFlights.forEach(f => {
+                const { onwardStops, returnStops } = getSpecialRoundTripStops(f);
+                const label = formatSpecialRoundTripStopsLabel(onwardStops, returnStops);
+                if (!stopMap.has(label)) {
+                    stopMap.set(label, { onwardStops, returnStops, label });
+                }
+            });
+            totalStops = Array.from(stopMap.values())
+                .sort((a, b) => a.onwardStops !== b.onwardStops ? a.onwardStops - b.onwardStops : a.returnStops - b.returnStops)
+                .map(item => item.label);
+        } else {
+            totalStops = [...new Set(apiFlights.map(f => getFlightStops(f)))].sort((a, b) => a - b);
+        }
+
+        const airlines = (apiFlightAirlines && apiFlightAirlines.length > 0)
+            ? apiFlightAirlines.map(f => ({
                 code: f.AirlineCode,
                 name: f.AirlineName,
                 count: f.AirlineCount,
             }))
-        };
-    }, [apiFlights, apiFlightAirlines]);
+            : (() => {
+                const map = new Map();
+                apiFlights.forEach(f => {
+                    const legs = f.FlightDetailResponses || f.flightDetailResponses || [];
+                    if (legs.length > 0) {
+                        const seenInFlight = new Set();
+                        legs.forEach(l => {
+                            const code = l.airlineCode || l.AirlineCode || f.AirlineCode;
+                            const name = l.airlineName || l.AirlineName || f.AirlineName?.split(",")[0];
+                            if (code && !seenInFlight.has(code)) {
+                                seenInFlight.add(code);
+                                if (!map.has(code)) {
+                                    map.set(code, { code, name: name || code, count: 1 });
+                                } else {
+                                    map.get(code).count += 1;
+                                }
+                            }
+                        });
+                    } else {
+                        const code = f.AirlineCode || f.AirlineCodeAndId?.split("-")[0];
+                        const name = f.AirlineName?.split(",")[0];
+                        if (code) {
+                            if (!map.has(code)) {
+                                map.set(code, { code, name: name || code, count: 1 });
+                            } else {
+                                map.get(code).count += 1;
+                            }
+                        }
+                    }
+                });
+                return Array.from(map.values());
+            })();
 
-    const returnFilterParams = useMemo(() => {
-        const prices = apiReturnFlights.map(f => f.AirlineMinNetPrice);
         return {
             minPrice: prices.length ? Math.min(...prices) : 0,
             maxPrice: prices.length ? Math.max(...prices) : 0,
-            totalStops: [...new Set(apiReturnFlights.map(f => f.AirlineStops))],
+            totalStops,
+            airlines
+        };
+    }, [apiFlights, apiFlightAirlines, isSpecialRoundTrip]);
+
+    const returnFilterParams = useMemo(() => {
+        const prices = apiReturnFlights.map(f => getFlightDisplayPrice(f));
+        return {
+            minPrice: prices.length ? Math.min(...prices) : 0,
+            maxPrice: prices.length ? Math.max(...prices) : 0,
+            totalStops: [...new Set(apiReturnFlights.map(f => getFlightStops(f)))].sort((a, b) => a - b),
             airlines: (apiReturnAirlines || []).map(f => ({
                 code: f.AirlineCode,
                 name: f.AirlineName,
@@ -128,7 +201,52 @@ export default function FlightSearch() {
         };
     }, [apiReturnFlights, apiReturnAirlines]);
 
-    // For round-trip: apply independent filters to each array
+    const [roundTripFilterTab, setRoundTripFilterTab] = useState("both"); // "both" | "outbound" | "return"
+
+    const combinedFilterParams = useMemo(() => {
+        const allFlights = [...apiFlights, ...apiReturnFlights];
+        const prices = allFlights.map(f => getFlightDisplayPrice(f)).filter(p => p > 0);
+        const allAirlinesMap = new Map();
+        [...apiFlightAirlines, ...(apiReturnAirlines || [])].forEach(a => {
+            if (!allAirlinesMap.has(a.AirlineCode)) {
+                allAirlinesMap.set(a.AirlineCode, { code: a.AirlineCode, name: a.AirlineName, count: a.AirlineCount });
+            } else {
+                const existing = allAirlinesMap.get(a.AirlineCode);
+                existing.count += a.AirlineCount;
+            }
+        });
+
+        return {
+            minPrice: prices.length ? Math.min(...prices) : 0,
+            maxPrice: prices.length ? Math.max(...prices) : 0,
+            totalStops: [...new Set(allFlights.map(f => getFlightStops(f)))].sort((a, b) => a - b),
+            airlines: Array.from(allAirlinesMap.values())
+        };
+    }, [apiFlights, apiReturnFlights, apiFlightAirlines, apiReturnAirlines]);
+
+    const combinedFilterState = useMemo(() => {
+        const stops = Array.from(new Set([...(outboundFilterState.selectedStops || []), ...(returnFilterState.selectedStops || [])]));
+        const airlines = Array.from(new Set([...(outboundFilterState.selectedAirlines || []), ...(returnFilterState.selectedAirlines || [])]));
+        const aircraftSizes = Array.from(new Set([...(outboundFilterState.selectedAircraftSizes || []), ...(returnFilterState.selectedAircraftSizes || [])]));
+        return {
+            selectedStops: stops,
+            selectedAirlines: airlines,
+            selectedAircraftSizes: aircraftSizes,
+            selectedPriceRange: [
+                Math.min(outboundFilterState.selectedPriceRange?.[0] ?? 0, returnFilterState.selectedPriceRange?.[0] ?? 0),
+                Math.max(outboundFilterState.selectedPriceRange?.[1] ?? Infinity, returnFilterState.selectedPriceRange?.[1] ?? Infinity)
+            ],
+            selectedDepartureTime: outboundFilterState.selectedDepartureTime || returnFilterState.selectedDepartureTime || null,
+            selectedArrivalTime: outboundFilterState.selectedArrivalTime || returnFilterState.selectedArrivalTime || null,
+            showFareBreakdown: outboundFilterState.showFareBreakdown || returnFilterState.showFareBreakdown || false,
+        };
+    }, [outboundFilterState, returnFilterState]);
+
+    const combinedFilterDispatch = useCallback((action) => {
+        outboundFilterDispatch(action);
+        returnFilterDispatch(action);
+    }, [outboundFilterDispatch, returnFilterDispatch]);
+
     const filteredOutboundFlights = useFilteredFlights({
         flights: isRoundTrip ? apiFlights : [],
         filters: outboundFilterState,
@@ -140,13 +258,11 @@ export default function FlightSearch() {
         sorting: selectedSorting,
     });
 
-    // Round-trip row count after filtering — driven by the longer filtered array
     const filteredRTRowCount = useMemo(() => {
         if (!isRoundTrip) return 0;
         return Math.max(filteredOutboundFlights.length, filteredReturnFlights.length);
     }, [isRoundTrip, filteredOutboundFlights, filteredReturnFlights]);
 
-    // Infinite scroll for round-trip rows
     const [visibleRTCount, setVisibleRTCount] = useState(10);
     const rtLoadMoreRef = React.useRef(null);
     useEffect(() => {
@@ -165,9 +281,7 @@ export default function FlightSearch() {
         return () => observer.disconnect();
     }, [isRoundTrip, filteredRTRowCount]);
 
-
     const toggleCompare = useCallback((flight) => {
-        console.log(flight, 'save the whole flight information')
         const exists = selectedFlights.some(
             f => f.AirlineCodeAndId === flight.AirlineCodeAndId
         );
@@ -210,9 +324,10 @@ export default function FlightSearch() {
     }, []);
 
     const handleBookRoundTrip = useCallback(() => {
-        const adults = Number(payload.AdultCount || 1);
-        const children = Number(payload.ChildCount || 0);
-        const infants = Number(payload.InfantCount || 0);
+        const adults = Number(payload?.AdultCount || 1);
+        const children = Number(payload?.ChildCount || 0);
+        const infants = Number(payload?.InfantCount || 0);
+        const travelType = Number(payload?.TravelType ?? 0);
 
         bookingStore.set({
             isRoundTrip: true,
@@ -220,25 +335,13 @@ export default function FlightSearch() {
             returnFlight: selectedReturn,
             outboundFareReviewKey: selectedOutbound?.FareReviewKey ?? null,
             returnFareReviewKey: selectedReturn?.FareReviewKey ?? null,
+            travelType,
             travellers: { adults, children, infants },
+            searchUrl: `/flight-results${window.location.search}`,
+            searchParams: window.location.search,
         });
         navigate('/review-details');
-    }, [selectedOutbound, selectedReturn, navigate, payload]);
-
-
-    // useEffect(() => {
-    //     if (isFilterOpen) {
-    //         document.documentElement.style.overflow = 'hidden';
-    //     } else {
-    //         document.documentElement.style.overflow = 'auto';
-    //     }
-
-    //     // Cleanup on unmount
-    //     return () => {
-    //         document.documentElement.style.overflow = 'auto';
-    //     };
-    // }, [isFilterOpen]);
-
+    }, [selectedOutbound, selectedReturn, payload, navigate]);
 
     useEffect(() => {
         let timer;
@@ -263,21 +366,139 @@ export default function FlightSearch() {
         return () => clearInterval(timer);
     }, [isLoading]);
 
+    const originCode = payload?.TripInfo?.[0]?.Origin || "";
+    const destinationCode = payload?.TripInfo?.[0]?.Destination || "";
+    const returnOriginCode = payload?.TripInfo?.[1]?.Origin || destinationCode;
+    const returnDestinationCode = payload?.TripInfo?.[1]?.Destination || originCode;
+
+    useEffect(() => {
+        if (apiFlights && apiFlights.length > 0) {
+            console.log("🛑 [Stops Filter Data Source]:", {
+                apiFieldUsed: "flight.AirlineStops",
+                extractedUniqueStops: filterParams.totalStops,
+                originAirport: originCode,
+                filterSectionTitle: `Stops From ${originCode || "Origin"}`,
+                allFlightStopsSample: apiFlights.slice(0, 5).map(f => ({
+                    airline: f.AirlineName || f.AirlineCode,
+                    flightNumber: f.AirlineCodeAndId || f.FlightNumber,
+                    AirlineStops: f.AirlineStops,
+                    stopLabel: f.AirlineStops === 0 ? "Non Stop" : f.AirlineStops === 1 ? "1 Stop" : `${f.AirlineStops} Stops`
+                }))
+            });
+        }
+    }, [apiFlights, filterParams, originCode]);
+
     return (
         <>
             {/* Mobile Filters Drawer */}
             <div
-                className={`fixed inset-0 bg-black/40 backdrop-blur-sm z-[9998] transition-opacity duration-300 ${isFilterOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'} `}
-                onClick={() => setIsFilterOpen(false)} />
-            <div className={`fixed top-0 left-0 z-[9999] bg-white transform transition-transform duration-300 ease-in-out ${isFilterOpen ? 'translate-x-0' : '-translate-x-full'}`}>
-                <div className="h-screen w-80 overflow-y-auto overscroll-contain">
-                    <Filters
-                        origin={payload.TripInfo[0].Origin}
-                        destination={payload.TripInfo[0].Destination}
-                        filters={filterParams}
-                    />
+                className={`fixed inset-0 bg-black/50 backdrop-blur-sm z-[9998] transition-opacity duration-300 ${isFilterOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}
+                onClick={() => setIsFilterOpen(false)}
+            />
+            <div className={`fixed top-0 left-0 h-full w-[85vw] max-w-sm z-[9999] bg-[#D5D5D5] shadow-2xl transform transition-transform duration-300 ease-in-out flex flex-col ${isFilterOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+                <div className="flex items-center justify-between px-5 py-3.5 border-b border-black/10 bg-[#D5D5D5]">
+                    <h2 className="text-base font-bold text-gray-900">Filters</h2>
+                    <button
+                        type="button"
+                        onClick={() => setIsFilterOpen(false)}
+                        className="p-1.5 -mr-1.5 rounded-full hover:bg-black/10 active:scale-95 transition text-gray-800 cursor-pointer"
+                        aria-label="Close filters"
+                    >
+                        <X size={22} />
+                    </button>
                 </div>
+                <div className="flex-1 overflow-y-auto overscroll-contain px-4 py-3 bg-[#D5D5D5]">
+                    {isRoundTrip ? (
+                        <div className="space-y-3">
+                            <div className="bg-white p-1 rounded-xl shadow-xs border border-gray-200 flex gap-1">
+                                <button
+                                    type="button"
+                                    onClick={() => setRoundTripFilterTab("both")}
+                                    className={`flex-1 py-1.5 px-2 text-xs font-semibold rounded-lg transition-colors cursor-pointer ${roundTripFilterTab === "both"
+                                        ? "bg-[#78080B] text-white shadow-xs"
+                                        : "text-gray-600 hover:text-gray-900 hover:bg-gray-100"
+                                        }`}
+                                >
+                                    All Flights
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setRoundTripFilterTab("outbound")}
+                                    className={`flex-1 py-1.5 px-2 text-xs font-semibold rounded-lg transition-colors cursor-pointer ${roundTripFilterTab === "outbound"
+                                        ? "bg-[#78080B] text-white shadow-xs"
+                                        : "text-gray-600 hover:text-gray-900 hover:bg-gray-100"
+                                        }`}
+                                >
+                                    {originCode || "Departure"}
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setRoundTripFilterTab("return")}
+                                    className={`flex-1 py-1.5 px-2 text-xs font-semibold rounded-lg transition-colors cursor-pointer ${roundTripFilterTab === "return"
+                                        ? "bg-[#78080B] text-white shadow-xs"
+                                        : "text-gray-600 hover:text-gray-900 hover:bg-gray-100"
+                                        }`}
+                                >
+                                    {returnOriginCode || "Return"}
+                                </button>
+                            </div>
 
+                            {roundTripFilterTab === "both" && (
+                                <Filters
+                                    origin={originCode}
+                                    destination={destinationCode}
+                                    flights={[...apiFlights, ...apiReturnFlights]}
+                                    filters={combinedFilterParams}
+                                    filterState={combinedFilterState}
+                                    filterDispatch={combinedFilterDispatch}
+                                    label="Round Trip Filters"
+                                    isRoundTrip={true}
+                                    isMobileDrawer={true}
+                                    showShadow={false}
+                                />
+                            )}
+
+                            {roundTripFilterTab === "outbound" && (
+                                <Filters
+                                    origin={originCode}
+                                    destination={destinationCode}
+                                    flights={apiFlights}
+                                    filters={filterParams}
+                                    filterState={outboundFilterState}
+                                    filterDispatch={outboundFilterDispatch}
+                                    label="Departure Filters"
+                                    isMobileDrawer={true}
+                                    showShadow={false}
+                                />
+                            )}
+
+                            {roundTripFilterTab === "return" && (
+                                <Filters
+                                    origin={returnOriginCode}
+                                    destination={returnDestinationCode}
+                                    flights={apiReturnFlights}
+                                    filters={returnFilterParams}
+                                    filterState={returnFilterState}
+                                    filterDispatch={returnFilterDispatch}
+                                    label="Return Filters"
+                                    isMobileDrawer={true}
+                                    showShadow={false}
+                                />
+                            )}
+                        </div>
+                    ) : (
+                        <Filters
+                            origin={originCode}
+                            destination={destinationCode}
+                            flights={apiFlights}
+                            filters={filterParams}
+                            isMobileDrawer={true}
+                            showShadow={false}
+                            isSpecialRoundTrip={isSpecialRoundTrip}
+                            isRoundTrip={isRoundTrip}
+                        />
+                    )}
+                </div>
             </div>
 
             <CompareFlightsWidget
@@ -310,7 +531,11 @@ export default function FlightSearch() {
             <div className="relative min-h-screen">
 
                 <img
-                    className="absolute right-0 z-1 max-w-full h-auto object-cover"
+                    className="absolute right-0 top-0 z-0 max-w-full h-auto object-cover pointer-events-none"
+                    style={{
+                        maskImage: 'linear-gradient(to bottom, black 70%, transparent 100%)',
+                        WebkitMaskImage: 'linear-gradient(to bottom, black 70%, transparent 100%)'
+                    }}
                     src={GrayFadedBg}
                     alt="gray faded background"
                 />
@@ -332,78 +557,148 @@ export default function FlightSearch() {
                     <LoadingBar progress={progress} />
                 )}
 
-
                 {/* Main Content */}
                 <div className={`relative max-w-7xl mx-auto px-5 sm:px-4 py-6 z-50 transition-all duration-500 ${isRoundTrip && (selectedOutbound || selectedReturn) ? 'pb-32' : ''}`}>
-                    <div className="flex gap-6">
+                    <div className="flex gap-6 items-start">
 
-                        <div className="hidden lg:block">
+                        <aside className="hidden lg:block w-70 shrink-0 sticky top-4 self-start">
                             {isRoundTrip ? (
-                                // Two filters → sticky + scrollable container
                                 <div
                                     className="
-                p-1
-                sticky top-6
-                max-h-[calc(100vh-3rem)]
-                overflow-y-auto
-                space-y-6
-                [scrollbar-width:thin]
-                [&::-webkit-scrollbar]:w-1
-                [&::-webkit-scrollbar-track]:bg-transparent
-                [&::-webkit-scrollbar-thumb]:bg-gray-400
-                [&::-webkit-scrollbar-thumb]:rounded-full
-                [&::-webkit-scrollbar-thumb:hover]:bg-gray-500
-            "
+                                        p-1
+                                        max-h-[calc(100vh-2rem)]
+                                        overflow-y-auto
+                                        overflow-x-hidden
+                                        space-y-3
+                                        [scrollbar-width:thin]
+                                        [&::-webkit-scrollbar]:w-1
+                                        [&::-webkit-scrollbar-track]:bg-transparent
+                                        [&::-webkit-scrollbar-thumb]:bg-gray-400
+                                        [&::-webkit-scrollbar-thumb]:rounded-full
+                                        [&::-webkit-scrollbar-thumb:hover]:bg-gray-500
+                                    "
                                 >
-                                    <Filters
-                                        origin={payload.TripInfo[0].Origin}
-                                        destination={payload.TripInfo[0].Destination}
-                                        filters={filterParams}
-                                        filterState={outboundFilterState}
-                                        filterDispatch={outboundFilterDispatch}
-                                        label="Departure Filters"
-                                        showShadow={false}
-                                    />
+                                    {/* Round Trip Filter Tab Switcher */}
+                                    <div className="bg-white p-1 rounded-xl shadow-xs border border-gray-200 flex gap-1">
+                                        <button
+                                            type="button"
+                                            onClick={() => setRoundTripFilterTab("both")}
+                                            className={`flex-1 py-1.5 px-2 text-xs font-semibold rounded-lg transition-colors cursor-pointer ${roundTripFilterTab === "both"
+                                                ? "bg-[#78080B] text-white shadow-xs"
+                                                : "text-gray-600 hover:text-gray-900 hover:bg-gray-100"
+                                                }`}
+                                        >
+                                            All Flights
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => setRoundTripFilterTab("outbound")}
+                                            className={`flex-1 py-1.5 px-2 text-xs font-semibold rounded-lg transition-colors cursor-pointer ${roundTripFilterTab === "outbound"
+                                                ? "bg-[#78080B] text-white shadow-xs"
+                                                : "text-gray-600 hover:text-gray-900 hover:bg-gray-100"
+                                                }`}
+                                        >
+                                            {originCode || "Departure"}
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => setRoundTripFilterTab("return")}
+                                            className={`flex-1 py-1.5 px-2 text-xs font-semibold rounded-lg transition-colors cursor-pointer ${roundTripFilterTab === "return"
+                                                ? "bg-[#78080B] text-white shadow-xs"
+                                                : "text-gray-600 hover:text-gray-900 hover:bg-gray-100"
+                                                }`}
+                                        >
+                                            {returnOriginCode || "Return"}
+                                        </button>
+                                    </div>
 
-                                    <Filters
-                                        origin={payload.TripInfo[1].Origin}
-                                        destination={payload.TripInfo[1].Destination}
-                                        filters={returnFilterParams}
-                                        filterState={returnFilterState}
-                                        filterDispatch={returnFilterDispatch}
-                                        label="Return Filters"
-                                        showShadow={false}
-                                    />
+                                    {roundTripFilterTab === "both" && (
+                                        <Filters
+                                            origin={originCode}
+                                            destination={destinationCode}
+                                            flights={[...apiFlights, ...apiReturnFlights]}
+                                            filters={combinedFilterParams}
+                                            filterState={combinedFilterState}
+                                            filterDispatch={combinedFilterDispatch}
+                                            label="Round Trip Filters"
+                                            isRoundTrip={true}
+                                            showShadow={false}
+                                        />
+                                    )}
+
+                                    {roundTripFilterTab === "outbound" && (
+                                        <Filters
+                                            origin={originCode}
+                                            destination={destinationCode}
+                                            flights={apiFlights}
+                                            filters={filterParams}
+                                            filterState={outboundFilterState}
+                                            filterDispatch={outboundFilterDispatch}
+                                            label="Departure Filters"
+                                            showShadow={false}
+                                        />
+                                    )}
+
+                                    {roundTripFilterTab === "return" && (
+                                        <Filters
+                                            origin={returnOriginCode}
+                                            destination={returnDestinationCode}
+                                            flights={apiReturnFlights}
+                                            filters={returnFilterParams}
+                                            filterState={returnFilterState}
+                                            filterDispatch={returnFilterDispatch}
+                                            label="Return Filters"
+                                            showShadow={false}
+                                        />
+                                    )}
                                 </div>
                             ) : (
-                                <div className='sticky top-10'>
-
+                                <div
+                                    className="
+                                        p-1
+                                        max-h-[calc(100vh-2rem)]
+                                        overflow-y-auto
+                                        overflow-x-hidden
+                                        [scrollbar-width:thin]
+                                        [&::-webkit-scrollbar]:w-1
+                                        [&::-webkit-scrollbar-track]:bg-transparent
+                                        [&::-webkit-scrollbar-thumb]:bg-gray-400
+                                        [&::-webkit-scrollbar-thumb]:rounded-full
+                                        [&::-webkit-scrollbar-thumb:hover]:bg-gray-500
+                                    "
+                                >
                                     <Filters
-                                        origin={payload.TripInfo[0].Origin}
-                                        destination={payload.TripInfo[0].Destination}
+                                        origin={originCode}
+                                        destination={destinationCode}
+                                        flights={apiFlights}
                                         filters={filterParams}
                                         showShadow={true}
+                                        isSpecialRoundTrip={isSpecialRoundTrip}
+                                        isRoundTrip={isRoundTrip}
                                     />
                                 </div>
-
                             )}
-                        </div>
+                        </aside>
 
                         {/* Results Area */}
                         <div className="flex-1">
-                            <div className="lg:hidden mb-4 flex justify-end items-center">
+                            {/* Mobile Search Summary & Filters in One Row */}
+                            <div className="lg:hidden flex items-center gap-2.5 mb-3">
+                                <div className="flex-1 min-w-0">
+                                    <MobileSearchSummary
+                                        onEdit={() => setShowMobileSearch(true)}
+                                        payload={payload}
+                                        firstFlight={flightsForFilter?.[0] || apiFlights?.[0]}
+                                    />
+                                </div>
                                 <button
                                     onClick={() => setIsFilterOpen(true)}
-                                    className="px-4 py-2 text-xs bg-[#78080B] text-white rounded-full font-medium shadow"
+                                    aria-label="Open Filters"
+                                    className="p-2.5 bg-[#78080B] text-white rounded-xl shadow-sm flex items-center justify-center shrink-0 cursor-pointer active:scale-95 transition hover:bg-[#600608]"
                                 >
-                                    Filters
+                                    <SlidersHorizontal size={18} />
                                 </button>
                             </div>
-
-                            {/* Mobile Search Summary */}
-                            <MobileSearchSummary
-                                onEdit={() => setShowMobileSearch(true)}
-                            />
 
                             {/* Sorting Options */}
                             <SortingOptions
@@ -411,6 +706,7 @@ export default function FlightSearch() {
                                 showOtherMenu={showOtherMenu}
                                 handleClick={handleClick}
                                 handleOtherSelect={handleOtherSelect}
+                                setShowOtherMenu={setShowOtherMenu}
                             />
 
                             {/* Flight Results */}
@@ -425,15 +721,20 @@ export default function FlightSearch() {
                                     <div className="text-center py-10 text-red-600">
                                         Something went wrong. Please try again.
                                     </div>
+                                ) : !isValidSearch || !isFetched ? (
+                                    <div className="text-center text-gray-600 py-16 sm:py-20 text-base sm:text-lg">
+                                        Please select your origin, destination, and travel dates above to find available flights.
+                                    </div>
                                 ) : apiFlights.length === 0 ? (
-                                    <div className="text-center text-gray-600 mt-10">
+                                    <div className="text-center text-gray-600 py-16 sm:py-20 text-base sm:text-lg">
                                         No flights found for this route. Try different dates or airports.
                                     </div>
                                 ) : isRoundTrip ? (
-                                    // Round-trip: both arrays filtered independently
                                     filteredRTRowCount === 0 ? (
-                                        <div className="text-center text-gray-600 mt-10">
-                                            No flights found for this route. Try different dates or airports.
+                                        <div className="text-center text-gray-600 py-16 sm:py-20 text-base sm:text-lg">
+                                            {apiFlights.length === 0 || apiReturnFlights.length === 0
+                                                ? "No flights found for this route. Try different dates or airports."
+                                                : "No flights match your current filters."}
                                         </div>
                                     ) : (
                                         Array.from({ length: Math.min(visibleRTCount, filteredRTRowCount) }, (_, i) => (
@@ -447,6 +748,7 @@ export default function FlightSearch() {
                                                 selectedReturn={selectedReturn}
                                                 onSelectOutbound={setSelectedOutbound}
                                                 onSelectReturn={setSelectedReturn}
+                                                showFareBreakdown={outboundFilterState.showFareBreakdown || returnFilterState.showFareBreakdown || filters.showFareBreakdown}
                                             />
                                         ))
                                     )
@@ -462,10 +764,11 @@ export default function FlightSearch() {
                                             onToggleDetails={toggleFlightDetails}
                                             onToggleCompare={toggleCompare}
                                             onViewPrices={handleViewPrices}
+                                            showFareBreakdown={filters.showFareBreakdown}
                                         />
                                     ))
                                 ) : (
-                                    <div className="text-center text-gray-600 mt-10">
+                                    <div className="text-center text-gray-600 py-16 sm:py-20 text-base sm:text-lg">
                                         No flights match your current filters.
                                     </div>
                                 )}
@@ -488,10 +791,8 @@ export default function FlightSearch() {
 
                         </div>
                     </div>
-                </div >
-            </div >
-
-
+                </div>
+            </div>
         </>
     );
 }

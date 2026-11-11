@@ -1,10 +1,14 @@
-import { useState, lazy, Suspense } from "react";
+import React, { useState, lazy, Suspense } from "react";
+import { createPortal } from "react-dom";
+import { X } from "lucide-react";
 import AirlineLogo from '@/assets/imgs/airlinelogo.webp'
 import api from '@/services/api.js';
+import { isSpecialRoundTripFlight, getSpecialRoundTripLegGroups } from '@/utils/flightStops';
+import { getAirlineLogo } from "@/utils/airlineCode";
 const Modal = lazy(() => import("@/components/modals/Modal"));
 
 
-const ViewFlightDetails = ({ flight }) => {
+const ViewFlightDetails = ({ flight, onClose }) => {
 
     const [fareRuleModal, setFareRuleModal] = useState(false);
     const [fareRuleData, setFareRuleData] = useState(null);
@@ -57,15 +61,61 @@ const ViewFlightDetails = ({ flight }) => {
         return { isHtml: false, content };
     };
 
-    return (
-        <>
+    const legs = flight.FlightDetailResponses || flight.flightDetailResponses || [flight];
+    const isSpecialRoundTrip = isSpecialRoundTripFlight(flight);
+    const { onwardLegs, returnLegs } = isSpecialRoundTrip
+        ? getSpecialRoundTripLegGroups(flight)
+        : { onwardLegs: legs, returnLegs: [] };
+
+    const firstLeg = onwardLegs[0] || legs[0];
+    const lastOnwardLeg = onwardLegs[onwardLegs.length - 1] || legs[0];
+
+    const fromCity = firstLeg?.AirlineDeparture?.city || firstLeg?.airlineDeparture?.city || flight.AirlineDeparture?.city || "Departure";
+    const toCity = isSpecialRoundTrip
+        ? (lastOnwardLeg?.AirlineArrival?.city || lastOnwardLeg?.airlineArrival?.city || "Destination")
+        : (flight.AirlineArrival?.city || legs[legs.length - 1]?.AirlineArrival?.city || legs[legs.length - 1]?.airlineArrival?.city || "Arrival");
+
+    const depDate = flight.DepartureDate || firstLeg?.DepartureDate || firstLeg?.departureDate || "";
+    const returnDate = isSpecialRoundTrip ? (returnLegs[0]?.DepartureDate || returnLegs[0]?.departureDate || "") : "";
+
+    if (typeof document === "undefined") return null;
+
+    return createPortal(
+        <div
+            className="fixed inset-0 z-[999999] flex items-center justify-center p-3 sm:p-6 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200"
+            onClick={onClose}
+        >
             <div
-                className="bg-white py-4">
+                className="relative bg-[#F8F9FA] rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col overflow-hidden border border-gray-200 animate-in zoom-in-95 duration-200"
+                onClick={(e) => e.stopPropagation()}
+            >
+                {/* Modal Top Header Bar */}
+                <div className="flex items-center justify-between px-4 sm:px-6 py-3.5 bg-[#78080B] text-white shrink-0">
+                    <div className="flex items-center gap-2">
+                        <h2 className="text-sm sm:text-base font-bold tracking-wide">
+                            {isSpecialRoundTrip ? `${fromCity} ⇄ ${toCity} (Round Trip)` : `${fromCity} → ${toCity}`}
+                        </h2>
+                        {depDate && (
+                            <span className="text-[11px] sm:text-xs bg-white/20 px-2.5 py-0.5 rounded-full font-medium">
+                                {isSpecialRoundTrip && returnDate ? `${depDate} – ${returnDate}` : depDate}
+                            </span>
+                        )}
+                    </div>
+                    {onClose && (
+                        <button
+                            type="button"
+                            onClick={onClose}
+                            className="p-1.5 -mr-1 rounded-full active:scale-95 transition hover:bg-white/20 cursor-pointer text-white"
+                            aria-label="Close modal"
+                        >
+                            <X size={20} />
+                        </button>
+                    )}
+                </div>
                 {/* Top Row Buttons */}
-                <div className="flex justify-center xs:justify-start item-center mb-4">
+                <div className="flex justify-start items-center px-4 sm:px-6 pt-3 pb-2 bg-white border-b border-gray-200 shrink-0">
                     <div
-                        className="flex mx-6 rounded-lg bg-[#D9D9D9] overflow-x-auto sm:overflow-visible w-fit"
-                        style={{ boxShadow: "0px 4px 4px rgba(0, 0, 0, 0.25)" }}
+                        className="flex rounded-lg bg-[#E5E7EB] p-1 gap-1 overflow-x-auto w-fit"
                     >
                         {[
                             { key: "details", label: "FLIGHT DETAILS" },
@@ -76,118 +126,197 @@ const ViewFlightDetails = ({ flight }) => {
                             <button
                                 key={key}
                                 onClick={() => setActiveTab(key)}
-                                className={`cursor-pointer py-1 px-1 xs:px-2 sm:py-2 sm:px-4 text-[8px] sm:text-sm font-medium whitespace-nowrap ${activeTab === key
-                                    ? "bg-[#920000] text-white rounded-sm"
-                                    : "hover:text-white hover:rounded-sm hover:bg-[#920000]"
+                                className={`cursor-pointer py-1.5 px-3 sm:px-4 text-[10px] sm:text-xs font-semibold rounded-md transition whitespace-nowrap ${activeTab === key
+                                    ? "bg-[#78080B] text-white shadow-sm"
+                                    : "text-gray-700 hover:text-gray-900 hover:bg-gray-200"
                                     }`}>
                                 {label}
                             </button>
                         ))}
                     </div>
-
                 </div>
 
-                {/* Tab Content */}
-                {activeTab === "details" && (
-                    <div className="mx-3 xs:mx-4 sm:mx-6">
-                        {/* Top Row */}
-                        <div className="flex justify-between mb-1">
-                            <div>
-                                <h3 className="font-semibold text-xs sm:text-base">
-                                    {flight.AirlineDeparture?.city} to {flight.AirlineArrival?.city},{" "}
-                                    {flight.DepartureDate}
-                                </h3>
-                            </div>
-                            <div>
-                                <button
-                                    onClick={handleFareRule}
-                                    disabled={loadingFareRule}
-                                    className="text-xs sm:text-sm font-medium text-[#920000] hover:text-[#781000] transition disabled:opacity-50 flex items-center gap-1"
-                                >
-                                    {loadingFareRule ? (
-                                        <>
-                                            <span className="inline-block w-3 h-3 border-2 border-[#920000] border-t-transparent rounded-full animate-spin" />
-                                            Loading...
-                                        </>
-                                    ) : "View Fare Rules"}
-                                </button>
-                            </div>
-                        </div>
+                {/* Modal Scrollable Body */}
+                <div className="flex-1 overflow-y-auto p-4 sm:p-6 overscroll-contain">
+                    {/* Tab Content */}
+                    {activeTab === "details" && (() => {
+                        const hasReturnInFlight = isSpecialRoundTrip;
 
-                        <div className="border border-black/30 rounded-2xl shadow-sm px-2 xs:px-4 py-2 sm:py-4 bg-white">
-                            <div className="flex items-center space-x-4">
-                                <div className="w-10 h-10 sm:h-12 sm:w-12 rounded-full flex items-center justify-center">
-                                    <img src={AirlineLogo} alt="airline logo" />
-                                </div>
-                                <div>
-                                    <div className="font-semibold text-sm xs:text-xl"> {flight.AirlineName} <span className="text-[10px] text-gray-500">  {flight.AirlineCodeAndId} </span></div>
-                                </div>
-                            </div>
-                            <div className="my-2 flex flex-row sm:items-start justify-around">
-
-                                {/* Departure */}
-                                <div className="text-start">
-                                    <div className="text-[9px] xs:text-xs sm:text-xl font-bold">{flight.DepartureTime}</div>
-                                    <div className="text-[8px] xs:text-[10px] sm:text-base text-[#78080B] font-medium"> {flight.DepartureDate} </div>
-                                    <div className="text-[9px] xs:text-xs text-gray-500"> {flight.AirlineDeparture?.city}</div>
-                                </div>
-
-                                {/* Flight duration and stops */}
-                                <div className="flex flex-col items-center justify-start font-semibold">
-                                    <div className="text-[10px] sm:text-sm text-gray-500 mb-1">{flight.AirlineDuration}</div>
-                                    <div className="relative w-8 xs:w-12 sm:w-24 h-0.5 bg-[#920000] rounded">
+                        return (
+                            <div className="space-y-4">
+                                {/* Top Row */}
+                                <div className="flex justify-between items-center mb-1">
+                                    <div>
+                                        <h3 className="font-semibold text-xs sm:text-base">
+                                            {isSpecialRoundTrip
+                                                ? `${fromCity} to ${toCity} and return to ${fromCity}, ${depDate}${returnDate ? ` – ${returnDate}` : ""}`
+                                                : `${fromCity} to ${toCity}, ${depDate}`}
+                                        </h3>
                                     </div>
-                                    <div className="text-xs sm:text-sm text-gray-500 mt-1"> {flight.AirlineStops === 0 ? "Non Stop" : `${flight.AirlineStops} Stop`}</div>
+                                    <div>
+                                        <button
+                                            onClick={handleFareRule}
+                                            disabled={loadingFareRule}
+                                            className="text-xs sm:text-sm font-medium text-[#920000] hover:text-[#781000] transition disabled:opacity-50 flex items-center gap-1"
+                                        >
+                                            {loadingFareRule ? (
+                                                <>
+                                                    <span className="inline-block w-3 h-3 border-2 border-[#920000] border-t-transparent rounded-full animate-spin" />
+                                                    Loading...
+                                                </>
+                                            ) : "View Fare Rules"}
+                                        </button>
+                                    </div>
                                 </div>
 
-                                {/* Arrival */}
-                                <div className="text-start">
-                                    <div className="text-[9px] xs:text-xs sm:text-xl font-bold">{flight.ArrivalTime}</div>
-                                    <div className="text-[8px] xs:text-[10px] sm:text-base text-[#78080B] font-medium"> {flight.ArrivalDate} </div>
-                                    <div className="text-[9px] xs:text-xs sm:text-sm text-gray-500">  {flight.AirlineArrival?.city}</div>
-                                </div>
+                                {legs.map((leg, idx) => {
+                                    const isReturnLeg = leg.isRs === true || leg.IsRs === true || leg.isReturn === true || leg.IsReturn === true;
+                                    const prevLeg = idx > 0 ? legs[idx - 1] : null;
+                                    const prevIsReturn = prevLeg && (prevLeg.isRs === true || prevLeg.IsRs === true || prevLeg.isReturn === true || prevLeg.IsReturn === true);
+                                    const isFirstReturnLeg = isReturnLeg && !prevIsReturn;
 
-                                {/* Price */}
-                                <div className="grid grid-cols-3 sm:flex gap-3 sm:gap-6 text-[8px] xs:text-[10px] sm:text-sm">
+                                    const badgeLabel = hasReturnInFlight
+                                        ? (isReturnLeg ? "Return Flight" : "Onward Flight")
+                                        : (legs.length > 1 ? `Flight ${idx + 1}` : "");
+                                    const badgeColor = isReturnLeg ? "bg-amber-100 text-amber-800" : "bg-red-100 text-red-800";
+                                    const connectingTime = leg.ConnectingTime || leg.connectingTime;
 
-                                    <div className="text-left sm:text-right">
-                                        <div className="font-semibold">
-                                            Baggage:
-                                            <br />
-                                            <p className="text-[#78080B] font-medium ">Adult</p>
-                                        </div>
-                                    </div>
+                                    const legAirlineName = leg.airlineName || leg.AirlineName || flight.AirlineName;
+                                    const legCode = leg.airlineCode || leg.AirlineCode || flight.AirlineCode || "";
+                                    const legFlightNo = leg.flightNo || leg.FlightNo || leg.flightNumber || flight.AirlineCodeAndId || "";
+                                    const depTime = leg.departureTime || leg.DepartureTime || flight.DepartureTime;
+                                    const depDate = leg.departureDate || leg.DepartureDate || flight.DepartureDate;
+                                    const depCity = (leg.airlineDeparture || leg.AirlineDeparture)?.city || (leg.airlineDeparture || leg.AirlineDeparture)?.name || flight.AirlineDeparture?.city;
+                                    const arrTime = leg.arrivalTime || leg.ArrivalTime || flight.ArrivalTime;
+                                    const arrDate = leg.arrivalDate || leg.ArrivalDate || flight.ArrivalDate;
+                                    const arrCity = (leg.airlineArrival || leg.AirlineArrival)?.city || (leg.airlineArrival || leg.AirlineArrival)?.name || flight.AirlineArrival?.city;
+                                    const duration = leg.airlineDuration || leg.AirlineDuration || flight.AirlineDuration;
+                                    const stops = leg.stops ?? leg.AirlineStops ?? flight.AirlineStops ?? 0;
 
-                                    <div className="text-left sm:text-right">
-                                        <div className="font-semibold">
-                                            Check-in:
-                                            <br />
-                                            <p className="text-[#78080B] font-medium ">
-                                                {flight.TotalPriceList?.[0]?.Baggages?.[0]?.CheckIn || "N/A"}
-                                            </p>
-                                        </div>
-                                    </div>
+                                    const legBaggage = flight.TotalPriceList?.[0]?.Baggages?.find(b => 
+                                        (b.Sector && (
+                                            (b.Sector.includes(leg.AirlineDeparture?.code || leg.airlineDeparture?.code) && b.Sector.includes(leg.AirlineArrival?.code || leg.airlineArrival?.code)) ||
+                                            b.SegmentId === leg.AirlineId || b.SegmentId === leg.airlineId
+                                        ))
+                                    ) || flight.TotalPriceList?.[0]?.Baggages?.[idx] || flight.TotalPriceList?.[0]?.Baggages?.[0];
 
-                                    <div className="text-left sm:text-right">
-                                        <div className="font-semibold">
-                                            Cabin:
-                                            <br />
-                                            <p className="text-[#78080B] font-medium ">
-                                                {flight.TotalPriceList?.[0]?.Baggages?.[0]?.HandBag || "N/A"}
-                                            </p>
-                                        </div>
-                                    </div>
+                                    const checkinBag = leg.CheckedinBag || leg.checkedinBag || legBaggage?.CheckedinBag || legBaggage?.CheckIn || "15 Kg";
+                                    const cabinBag = leg.CabinBag || leg.cabinBag || legBaggage?.CabinBag || legBaggage?.HandBag || "7 Kg";
 
-                                </div>
+                                    return (
+                                        <React.Fragment key={idx}>
+                                            {/* Return Flight Journey Divider */}
+                                            {isFirstReturnLeg && (
+                                                <div className="my-3 pt-3 border-t-2 border-dashed border-[#78080B]/25 flex items-center justify-between">
+                                                    <span className="text-xs sm:text-sm font-bold text-[#78080B] flex items-center gap-1.5">
+                                                        <span>🔄 Return Journey:</span>
+                                                        <span>{depCity} → {fromCity}</span>
+                                                    </span>
+                                                    {depDate && (
+                                                        <span className="text-[11px] font-semibold text-gray-700 bg-gray-200/80 px-2 py-0.5 rounded">
+                                                            {depDate}
+                                                        </span>
+                                                    )}
+                                                </div>
+                                            )}
 
+                                            {/* Layover indicator for connecting flights within same direction */}
+                                            {idx > 0 && !isFirstReturnLeg && connectingTime && (
+                                                <div className="flex items-center justify-center my-1">
+                                                    <div className="bg-amber-50 border border-amber-200 text-amber-800 text-xs font-semibold px-4 py-1.5 rounded-full flex items-center gap-1.5 shadow-2xs">
+                                                        <span>⏱</span>
+                                                        <span>Layover in {depCity}: {connectingTime}</span>
+                                                    </div>
+                                                </div>
+                                            )}
 
+                                            <div className="border border-black/30 rounded-2xl shadow-sm px-2 xs:px-4 py-2 sm:py-4 bg-white">
+                                                {badgeLabel && (
+                                                    <div className="mb-2 pb-2 border-b border-gray-100 flex items-center justify-between">
+                                                        <span className={`text-xs font-bold px-2.5 py-0.5 rounded-full ${badgeColor}`}>
+                                                            {badgeLabel}
+                                                        </span>
+                                                        <span className="text-xs text-gray-500 font-medium">
+                                                            {depCity} → {arrCity}
+                                                        </span>
+                                                    </div>
+                                                )}
+
+                                                <div className="flex items-center space-x-4">
+                                                    <div className="w-10 h-10 sm:h-12 sm:w-12 rounded-full flex items-center justify-center bg-white border border-gray-100 overflow-hidden p-1 shadow-xs">
+                                                        <img
+                                                            src={getAirlineLogo(legCode) || AirlineLogo}
+                                                            alt={legAirlineName || "airline logo"}
+                                                            className="w-full h-full object-contain"
+                                                        />
+                                                    </div>
+                                                    <div>
+                                                        <div className="font-semibold text-sm xs:text-xl">
+                                                            {legAirlineName} <span className="text-[10px] text-gray-500"> {legCode} {legFlightNo} </span>
+                                                        </div>
+                                                    </div>
+                                                </div>
+
+                                                <div className="my-2 flex flex-row sm:items-start justify-around">
+                                                    {/* Departure */}
+                                                    <div className="text-start">
+                                                        <div className="text-[9px] xs:text-xs sm:text-xl font-bold">{depTime}</div>
+                                                        <div className="text-[8px] xs:text-[10px] sm:text-base text-[#78080B] font-medium"> {depDate} </div>
+                                                        <div className="text-[9px] xs:text-xs text-gray-500"> {depCity}</div>
+                                                    </div>
+
+                                                    {/* Flight duration and stops */}
+                                                    <div className="flex flex-col items-center justify-start font-semibold">
+                                                        <div className="text-[10px] sm:text-sm text-gray-500 mb-1">{duration}</div>
+                                                        <div className="relative w-8 xs:w-12 sm:w-24 h-0.5 bg-[#920000] rounded"></div>
+                                                        <div className="text-xs sm:text-sm text-gray-500 mt-1"> {stops === 0 ? "Non Stop" : `${stops} Stop`}</div>
+                                                    </div>
+
+                                                    {/* Arrival */}
+                                                    <div className="text-start">
+                                                        <div className="text-[9px] xs:text-xs sm:text-xl font-bold">{arrTime}</div>
+                                                        <div className="text-[8px] xs:text-[10px] sm:text-base text-[#78080B] font-medium"> {arrDate} </div>
+                                                        <div className="text-[9px] xs:text-xs sm:text-sm text-gray-500"> {arrCity}</div>
+                                                    </div>
+
+                                                    {/* Baggage */}
+                                                    <div className="grid grid-cols-3 sm:flex gap-3 sm:gap-6 text-[8px] xs:text-[10px] sm:text-sm">
+                                                        <div className="text-left sm:text-right">
+                                                            <div className="font-semibold">
+                                                                Baggage:
+                                                                <br />
+                                                                <p className="text-[#78080B] font-medium ">Adult</p>
+                                                            </div>
+                                                        </div>
+
+                                                        <div className="text-left sm:text-right">
+                                                            <div className="font-semibold">
+                                                                Check-in:
+                                                                <br />
+                                                                <p className="text-[#78080B] font-medium ">
+                                                                    {checkinBag}
+                                                                </p>
+                                                            </div>
+                                                        </div>
+
+                                                        <div className="text-left sm:text-right">
+                                                            <div className="font-semibold">
+                                                                Cabin:
+                                                                <br />
+                                                                <p className="text-[#78080B] font-medium ">
+                                                                    {cabinBag}
+                                                                </p>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </React.Fragment>
+                                    );
+                                })}
                             </div>
-
-
-                        </div>
-
-                    </div>
-                )}
+                        );
+                    })()}
 
                 {activeTab === "fare" && (
                     <div className="mx-3 xs:mx-4 sm:mx-6">
@@ -348,9 +477,9 @@ const ViewFlightDetails = ({ flight }) => {
                         </div>
                     </div>
                 )}
-
-
+                </div>
             </div>
+
             <Suspense fallback={null}>
                 <Modal
                     open={fareRuleModal}
@@ -391,9 +520,9 @@ const ViewFlightDetails = ({ flight }) => {
                         <p className="text-sm text-gray-500">No Fare Rules Found</p>
                     )}
                 </Modal>
-            </Suspense >
-
-        </>
+            </Suspense>
+        </div>,
+        document.body
     );
 };
 

@@ -2,13 +2,15 @@ import axios from "axios";
 
 const TOKEN_KEY = "skyvoo_token";
 const REFRESH_TOKEN_KEY = "skyvoo_refresh_token";
+const TOKEN_EXPIRY_KEY = "skyvoo_token_expiry";
 const USER_INFO_KEY = "skyvoo_user";
+
 
 
 // Base Axios Instance
 const api = axios.create({
     baseURL: "https://skyvoo.esmartbazaar.in/api",
-    timeout: 30000,
+    timeout: 80000,
     headers: {
         "Content-Type": "application/json",
     },
@@ -23,7 +25,12 @@ api.interceptors.request.use(
     (config) => {
         const token = localStorage.getItem(TOKEN_KEY);
         if (token) {
-            config.headers.Authorization = `Bearer ${token}`;
+            if (config.headers && typeof config.headers.set === "function") {
+                config.headers.set("Authorization", `Bearer ${token}`);
+            } else {
+                config.headers = config.headers || {};
+                config.headers["Authorization"] = `Bearer ${token}`;
+            }
         }
         return config;
     },
@@ -62,16 +69,25 @@ api.interceptors.response.use((response) => response,
         if (error.response?.status === 401 && !originalRequest._retry) {
             const storedRefreshToken = localStorage.getItem(REFRESH_TOKEN_KEY);
 
+            console.log('[Auth] 401 detected on:', originalRequest.url);
+            console.log('[Auth] Stored refresh token:', storedRefreshToken ? 'EXISTS' : 'MISSING');
+
             // No refresh token available – log out immediately
-            if (!storedRefreshToken) {
+            if (!storedRefreshToken || storedRefreshToken === 'undefined' || storedRefreshToken === 'null') {
+                console.warn('[Auth] No valid refresh token found. Clearing session.');
                 localStorage.removeItem(TOKEN_KEY);
                 localStorage.removeItem(REFRESH_TOKEN_KEY);
+                localStorage.removeItem(TOKEN_EXPIRY_KEY);
                 localStorage.removeItem(USER_INFO_KEY);
+                if (typeof window !== "undefined") {
+                    window.dispatchEvent(new Event("auth:unauthorized"));
+                }
                 return Promise.reject(error);
             }
 
             // If a refresh is already in flight, queue this request
             if (isRefreshing) {
+                console.log('[Auth] Refresh already in progress. Queuing request.');
                 return new Promise((resolve, reject) => {
                     failedQueue.push({ resolve, reject });
                 })
@@ -86,6 +102,7 @@ api.interceptors.response.use((response) => response,
             isRefreshing = true;
 
             try {
+                console.log('[Auth] Calling refresh token endpoint...');
                 // Call the refresh endpoint directly (no interceptors on this call)
                 const { data } = await axios.post(
                     `${api.defaults.baseURL}/Auth/refresh`,
@@ -93,14 +110,24 @@ api.interceptors.response.use((response) => response,
                     { headers: { "Content-Type": "application/json" } }
                 );
 
-                if (data?.Status === "SUCCESS" && data?.Token) {
-                    const newToken = data.Token;
-                    const newRefreshToken = data.RefreshToken;
+                console.log('[Auth] Refresh response:', data);
 
-                    // Persist new tokens
+                // Support both response formats: { Status, Token } or { IsSuccess, Data }
+                const isSuccess = data?.Status === "SUCCESS" || data?.IsSuccess === true;
+                const newToken = data?.Token || data?.Data?.Token || data?.AccessToken || data?.Data?.AccessToken;
+                const newRefreshToken = data?.RefreshToken || data?.Data?.RefreshToken;
+                const newExpiry = data?.TokenExpiryTime || data?.AccessTokenExpiresAt || data?.Data?.TokenExpiryTime || data?.Data?.AccessTokenExpiresAt;
+
+                if (isSuccess && newToken) {
+                    console.log('[Auth] Token refreshed successfully.');
+
+                    // Persist new tokens & expiry
                     localStorage.setItem(TOKEN_KEY, newToken);
                     if (newRefreshToken) {
                         localStorage.setItem(REFRESH_TOKEN_KEY, newRefreshToken);
+                    }
+                    if (newExpiry) {
+                        localStorage.setItem(TOKEN_EXPIRY_KEY, newExpiry);
                     }
 
                     // Update default header for future requests
@@ -110,18 +137,28 @@ api.interceptors.response.use((response) => response,
                     originalRequest.headers.Authorization = `Bearer ${newToken}`;
                     return api(originalRequest);
                 } else {
+                    console.warn('[Auth] Refresh failed. Response did not contain a valid token.', data);
                     // Refresh returned FAILED – clear session
                     processQueue(new Error("Refresh failed"), null);
                     localStorage.removeItem(TOKEN_KEY);
                     localStorage.removeItem(REFRESH_TOKEN_KEY);
+                    localStorage.removeItem(TOKEN_EXPIRY_KEY);
                     localStorage.removeItem(USER_INFO_KEY);
+                    if (typeof window !== "undefined") {
+                        window.dispatchEvent(new Event("auth:unauthorized"));
+                    }
                     return Promise.reject(error);
                 }
             } catch (refreshError) {
+                console.error('[Auth] Refresh token call threw an error:', refreshError);
                 processQueue(refreshError, null);
                 localStorage.removeItem(TOKEN_KEY);
                 localStorage.removeItem(REFRESH_TOKEN_KEY);
+                localStorage.removeItem(TOKEN_EXPIRY_KEY);
                 localStorage.removeItem(USER_INFO_KEY);
+                if (typeof window !== "undefined") {
+                    window.dispatchEvent(new Event("auth:unauthorized"));
+                }
                 return Promise.reject(refreshError);
             } finally {
                 isRefreshing = false;

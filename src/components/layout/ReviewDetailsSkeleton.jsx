@@ -13,23 +13,22 @@ export default function ReviewDetailsSkeleton() {
     <div className="min-h-screen relative">
       {/* Top Red Header Bar */}
       <div
-        className="z-999 bg-[#78080B] text-white py-6 px-4 sticky top-0"
+        className="bg-[#78080B] text-white py-6 px-4 relative z-10"
         style={{ boxShadow: "0px 4px 4px 0px rgba(0, 0, 0, 0.25)" }}
       >
         <div className="max-w-7xl mx-auto flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <h1 className="text-xl sm:text-2xl font-bold">
             Complete your booking
           </h1>
-          <div className="hidden lg:flex gap-4 text-sm">
+          <div className="hidden lg:flex gap-6 text-sm font-medium">
             <span className="text-slate-300">Flights Summary</span>
             <span className="text-slate-300">Traveller Details</span>
-            <span className="text-slate-300">Seats & Meals</span>
-            <span className="text-slate-300">Add-ons</span>
+            <span className="text-slate-300">Seats</span>
           </div>
         </div>
       </div>
 
-      <div className="relative z-20 pb-5 sm:pb-2 bg-cover bg-center">
+      <div className="relative z-20 pb-14 sm:pb-7 bg-cover bg-center">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-6">
           <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 lg:gap-6">
             {/* Left Column (Main Content - 3 cols) */}

@@ -20,8 +20,12 @@ const FlightReschedule = lazy(() => import('@/pages/FlightReschedule'));
 const FlightCancellation = lazy(() => import('@/pages/FlightCancellation'));
 const MyBookings = lazy(() => import('@/pages/MyBookings'));
 const BookingDetails = lazy(() => import('@/pages/BookingDetails'));
+const PaymentCallback = lazy(() => import('@/pages/PaymentCallback'));
+const SsoLogin = lazy(() => import('@/pages/SsoLogin'));
+const PrintTicketPage = lazy(() => import('@/pages/PrintTicketPage'));
 
 import Layout from '@/components/layout/Layout';
+import ProtectedRoute from '@/components/auth/ProtectedRoute';
 
 import { FlightFilterProvider } from '@/contexts/FlightFilterContext';
 import { CompareProvider } from '@/contexts/CompareContext';
@@ -36,17 +40,23 @@ export default function AppRoutes() {
                         <Route path="/review-details" element={<ReviewDetails />} />
                         <Route path="/flight-seat-map" element={<FlightSeatMap />} />
                         <Route path="/payment" element={<Payment />} />
-                        <Route path="/my-profile" element={<Profile />} />
-                        <Route path="/booking-lists" element={<BookingLists />} />
-                        <Route path="/mark-up" element={<MarkUp />} />
-                        <Route path="/coupons-and-offers" element={<CouponsAndOffers />} />
-                        <Route path="/complaint-register" element={<ComplaintRegister />} />
-                        <Route path="/statement" element={<Statement />} />
-                        <Route path="/flight-reschedule" element={<FlightReschedule />} />
-                        <Route path="/flight-cancellation" element={<FlightCancellation />} />
-                        <Route path="/my-bookings" element={<MyBookings />} />
-                        <Route path="/booking-details" element={<BookingDetails />} />
+                        <Route path="/my-profile" element={<ProtectedRoute><Profile /></ProtectedRoute>} />
+                        <Route path="/booking-lists" element={<ProtectedRoute><BookingLists /></ProtectedRoute>} />
+                        <Route path="/mark-up" element={<ProtectedRoute requireB2B={true}><MarkUp /></ProtectedRoute>} />
+                        <Route path="/coupons-and-offers" element={<ProtectedRoute><CouponsAndOffers /></ProtectedRoute>} />
+                        <Route path="/complaint-register" element={<ProtectedRoute><ComplaintRegister /></ProtectedRoute>} />
+                        <Route path="/statement" element={<ProtectedRoute><Statement /></ProtectedRoute>} />
+                        <Route path="/flight-reschedule" element={<ProtectedRoute><FlightReschedule /></ProtectedRoute>} />
+                        <Route path="/flight-cancellation" element={<ProtectedRoute><FlightCancellation /></ProtectedRoute>} />
+                        <Route path="/my-bookings" element={<ProtectedRoute><MyBookings /></ProtectedRoute>} />
+                        <Route path="/booking-details" element={<ProtectedRoute><BookingDetails /></ProtectedRoute>} />
+                        <Route path="/payment-callback" element={<PaymentCallback />} />
+                        <Route path="/payment/callback" element={<PaymentCallback />} />
+                        <Route path="/pg-callback" element={<PaymentCallback />} />
                     </Route>
+
+                    {/* Standalone Authentication Route */}
+                    <Route path="/sso-login" element={<SsoLogin />} />
 
                     {/* Without layout */}
                     <Route
@@ -64,6 +74,9 @@ export default function AppRoutes() {
                             <CompareFlights />
                         }
                     />
+
+                    {/* Standalone Printable E-Ticket Route */}
+                    <Route path="/print-ticket" element={<PrintTicketPage />} />
 
                 </Routes>
 

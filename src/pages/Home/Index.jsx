@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import PromotionalCard from './components/PromotionalCard';
 import BookingForm from './components/BookingForm';
-import BookingFlightSectionBg from '@/assets/imgs/bookingbg.webp';
+import BookingFlightSectionBg from '@/assets/imgs/bookingbg.jpg';
 
 export default function Home() {
 
@@ -10,7 +10,10 @@ export default function Home() {
 
     if (planeEl) {
       const handleAnimationEnd = () => {
-        window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+        const bookingSection = document.getElementById('booking-section');
+        if (bookingSection) {
+          bookingSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
       };
 
       planeEl.addEventListener('animationend', handleAnimationEnd);
@@ -25,9 +28,9 @@ export default function Home() {
     <>
       <div>
         <div>
-          <main className="relative z-10 px-4 sm:px-6 lg:px-8 pt-3">
+          <main className="relative z-10 px-4 sm:px-6 lg:px-8 pt-6 sm:pt-8 md:pt-10 overflow-hidden">
             <div className="max-w-6xl mx-auto">
-              <div className="text-center mb-8 sm:mb-12">
+              <div className="text-center mb-8 sm:mb-12 mt-1 sm:mt-2">
                 <h1
                   className="primary-font text-2xl sm:text-4xl lg:text-5xl font-medium text-black mb-3 sm:mb-4 leading-tight"
                   style={{ textShadow: '0px 4px 4px rgba(0, 0, 0, 0.25)' }}
@@ -53,10 +56,23 @@ export default function Home() {
         </div>
 
         {/* Booking Section */}
-        <div className="pb-5 sm:pb-2 bg-cover bg-center" style={{ backgroundImage: `url(${BookingFlightSectionBg})` }} >
-          <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div className="my-8 text-start">
-              <h4 className=" text-2xl sm:text-3xl lg:text-4xl font-bold">
+        <div
+          id="booking-section"
+          className="relative transition-all overflow-hidden"
+        >
+          {/* High-res background overlay with smooth top and bottom merge */}
+          <div
+            className="absolute inset-0 bg-cover bg-center sm:bg-right bg-no-repeat pointer-events-none opacity-[0.38]"
+            style={{
+              backgroundImage: `url(${BookingFlightSectionBg})`,
+              maskImage: 'linear-gradient(to bottom, transparent 0%, black 12%, black 88%, transparent 100%)',
+              WebkitMaskImage: 'linear-gradient(to bottom, transparent 0%, black 12%, black 88%, transparent 100%)'
+            }}
+          />
+
+          <div className="relative z-10 max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 pb-20">
+            <div className="mb-6 sm:mb-8 text-start">
+              <h4 className="text-2xl sm:text-3xl lg:text-4xl font-bold text-gray-900 tracking-tight">
                 Start Booking Your Flight Now
               </h4>
             </div>
@@ -64,7 +80,6 @@ export default function Home() {
           </div>
         </div>
       </div>
-
     </>
   );
 }

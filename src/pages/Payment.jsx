@@ -124,6 +124,12 @@ export default function FlightPaymentPage() {
         setTimeout(() => {
             setIsProcessing(false);
             setShowSuccessModal(true);
+            try {
+                localStorage.removeItem("skyvoo_booking");
+                sessionStorage.removeItem("skyvoo_booking");
+            } catch (e) {
+                // ignore
+            }
         }, 2000);
     };
 

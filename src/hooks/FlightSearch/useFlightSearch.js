@@ -1,32 +1,28 @@
-import { useMemo, useEffect } from "react";
+import { useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { searchFlights } from "@/services/flightsSearch";
 
 export const useFlightSearch = () => {
-
     const [searchParams] = useSearchParams();
 
+    const origin = searchParams.get("origin") || "";
+    const destination = searchParams.get("destination") || "";
+    const departDate = searchParams.get("departDate") || "";
+    const returnDate = searchParams.get("returnDate") || "";
+
+    const adults = Number(searchParams.get("adults") || 1);
+    const children = Number(searchParams.get("children") || 0);
+    const infants = Number(searchParams.get("infants") || 0);
+
+    const cabinClass = Number(searchParams.get("cabinClass") || 0);
+    const travelType = Number(searchParams.get("travelType") || 0);
+    const bookingType = Number(searchParams.get("bookingType") || 0);
+
+    const srCitizenSearch = searchParams.get("srCitizenSearch") === "true";
+    const studentFareSearch = searchParams.get("studentFareSearch") === "true";
+
     const payload = useMemo(() => {
-        const origin = searchParams.get("origin");
-        const destination = searchParams.get("destination");
-        const departDate = searchParams.get("departDate");
-        const returnDate = searchParams.get("returnDate");
-
-        const adults = Number(searchParams.get("adults") || 1);
-        const children = Number(searchParams.get("children") || 0);
-        const infants = Number(searchParams.get("infants") || 0);
-
-        const cabinClass = Number(searchParams.get("cabinClass") || 0);
-        const travelType = Number(searchParams.get("travelType") || 0);
-        const bookingType = Number(searchParams.get("bookingType") || 0);
-
-        const srCitizenSearch =
-            searchParams.get("srCitizenSearch") === "true";
-
-        const studentFareSearch =
-            searchParams.get("studentFareSearch") === "true";
-
         const tripInfo = [
             {
                 Origin: origin,
@@ -57,19 +53,51 @@ export const useFlightSearch = () => {
             StudentFareSearch: studentFareSearch,
             Filtered_Airline: [{ Airline_Code: "" }],
         };
-    }, [searchParams]);
+    }, [
+        origin,
+        destination,
+        departDate,
+        returnDate,
+        adults,
+        children,
+        infants,
+        cabinClass,
+        travelType,
+        bookingType,
+        srCitizenSearch,
+        studentFareSearch,
+    ]);
 
-    const origin = payload.TripInfo?.[0]?.Origin;
-    const destination = payload.TripInfo?.[0]?.Destination;
-    const departDate = payload.TripInfo?.[0]?.TravelDate;
-
-    const isValidSearch = origin && destination && departDate;
+    const isValidSearch = Boolean(
+        origin &&
+        destination &&
+        departDate &&
+        origin !== "Origin" &&
+        destination !== "Destination"
+    );
 
     const query = useQuery({
-        queryKey: ["flight-search", payload],
+        queryKey: [
+            "flight-search",
+            origin,
+            destination,
+            departDate,
+            returnDate,
+            adults,
+            children,
+            infants,
+            cabinClass,
+            travelType,
+            bookingType,
+            srCitizenSearch,
+            studentFareSearch,
+        ],
         queryFn: () => searchFlights(payload),
         staleTime: 1000 * 60 * 5,
-        enabled: !!isValidSearch
+        gcTime: 1000 * 60 * 10,
+        refetchOnWindowFocus: false,
+        refetchOnMount: false,
+        enabled: isValidSearch,
     });
 
     const apiFlights = query.data?.Data?.OneWayResponses || [];
@@ -79,6 +107,8 @@ export const useFlightSearch = () => {
 
     return {
         ...query,
+        isValidSearch,
+        isFetched: query.isFetched,
         apiFlights,
         apiFlightAirlines,
         apiReturnFlights,
@@ -86,3 +116,6 @@ export const useFlightSearch = () => {
         payload,
     };
 };
+
+export default useFlightSearch;
+

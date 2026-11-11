@@ -17,10 +17,14 @@ import "react-day-picker/dist/style.css";
 import { useQuery } from "@tanstack/react-query";
 import { fetchAirportsByCode } from "@/services/airportsSearch.js";
 import { CoachOptions } from "@/data/ExtraData.js";
+import { useAuth } from '@/contexts/AuthContext';
+import SignInModal from '@/components/modals/SignInModal';
 
 
 function BookingForm() {
     const navigate = useNavigate();
+    const { isLoggedIn } = useAuth();
+    const [isSignInModalOpen, setIsSignInModalOpen] = useState(false);
 
     const [startAnimation, setStartAnimation] = useState(false);
 
@@ -138,17 +142,44 @@ function BookingForm() {
         return () => window.removeEventListener('scroll', handleScroll);
     }, []);
 
-    const CustomOption = (props) => (
-        <components.Option {...props}>
-            <div className="flex justify-between w-full">
-                <div className="flex flex-col">
-                    <span className="text-gray-900">{props.data.city}, {props.data.countryCode}</span>
-                    <span className="text-gray-400 text-sm">{props.data.airportName}</span>
+    const CustomOption = (props) => {
+        const country = props.data.countryName || (props.data.countryCode === 'IND' || props.data.countryCode === 'IN' ? 'India' : props.data.countryCode || props.data.country || '');
+        return (
+            <components.Option {...props}>
+                <div className="flex items-center gap-3 w-full py-0.5 text-left">
+                    <div className="w-13 h-11 min-w-[50px] bg-[#f0f2f5] border border-gray-200/90 rounded-xl flex items-center justify-center flex-shrink-0">
+                        <span className="text-sm font-bold text-gray-800 tracking-wide">
+                            {props.data.airportCode}
+                        </span>
+                    </div>
+                    <div className="flex flex-col min-w-0 flex-1 justify-center">
+                        <span className="text-[14px] sm:text-[15px] font-semibold text-gray-900 truncate leading-tight">
+                            {props.data.city}{country ? `, ${country}` : ''}
+                        </span>
+                        <span className="text-xs text-gray-500 font-normal truncate mt-0.5" title={props.data.airportName}>
+                            {props.data.airportName}
+                        </span>
+                    </div>
                 </div>
-                <span className="font-medium text-gray-700">{props.data.airportCode}</span>
-            </div>
-        </components.Option>
-    );
+            </components.Option>
+        );
+    };
+
+    const CustomSingleValue = (props) => {
+        if (props.selectProps.inputValue || props.isFocused || props.selectProps.menuIsOpen) return null;
+        return (
+            <components.SingleValue {...props}>
+                <div className="flex flex-col text-left leading-tight w-full overflow-hidden pb-1">
+                    <span className="text-base sm:text-[17px] font-bold text-[#333333] truncate">
+                        {props.data.city}
+                    </span>
+                    <span className="text-[11px] text-gray-500 font-normal truncate mt-0.5" title={props.data.airportName}>
+                        {props.data.airportName}
+                    </span>
+                </div>
+            </components.SingleValue>
+        );
+    };
 
     const handleFlightInputChange = (field, value) => {
         setFlightSearchInfo(prev => {
@@ -165,6 +196,14 @@ function BookingForm() {
 
             return updated;
         });
+
+        if (field === "return") {
+            if (value) {
+                setTripType((current) => current === "SPECIAL_ROUND_TRIP" ? "SPECIAL_ROUND_TRIP" : "ROUND_TRIP");
+            } else {
+                setTripType("ONE_WAY");
+            }
+        }
     };
 
     const handleSwap = () => {
@@ -185,6 +224,7 @@ function BookingForm() {
         // Auto-close and adjust Return if needed
         if (flightSearchInfo.return && date > flightSearchInfo.return) {
             handleFlightInputChange("return", null);
+            setTripType("ONE_WAY");
         }
         setDepartOpen(false);
     };
@@ -193,10 +233,17 @@ function BookingForm() {
         handleFlightInputChange("return", date);
 
         if (date) {
-            setTripType("ROUND_TRIP");
+            setTripType((current) => current === "SPECIAL_ROUND_TRIP" ? "SPECIAL_ROUND_TRIP" : "ROUND_TRIP");
         }
 
         setReturnOpen(false);
+    };
+
+    const handleTripTypeChange = (newType) => {
+        setTripType(newType);
+        if (newType === 'ONE_WAY') {
+            handleFlightInputChange("return", null);
+        }
     };
 
     const handleRemoveReturnDate = () => {
@@ -204,12 +251,72 @@ function BookingForm() {
         setTripType("ONE_WAY");
     };
 
+    const toNumber = (v) => {
+        if (typeof v === "string" && v.startsWith(">")) {
+            const parsed = parseInt(v.slice(1), 10);
+            return Number.isNaN(parsed) ? 0 : parsed + 1;
+        }
+        const n = Number(v);
+        return Number.isNaN(n) ? 0 : n;
+    };
+
+    const totalTravellers =
+        toNumber(travellers.adults) +
+        toNumber(travellers.children) +
+        toNumber(travellers.infants);
+
+    useEffect(() => {
+        const adultCount = toNumber(travellers.adults);
+        const childrenCount = toNumber(travellers.children);
+        const infantsCount = toNumber(travellers.infants);
+
+        setFlightSearchInfo(prev => ({
+            ...prev,
+            traveller: { adults: adultCount, children: childrenCount, infants: infantsCount }
+        }));
+    }, [travellers]);
+
+    const getAdultCount = (val = travellers.adults) => toNumber(val) || 1;
+    const getChildCount = (val = travellers.children) => toNumber(val) || 0;
+    const getInfantCount = (val = travellers.infants) => toNumber(val) || 0;
+
+    const handleAdultsChange = (newAdults) => {
+        const newAdultNum = toNumber(newAdults);
+        setTravellers((prev) => {
+            const curInfantNum = toNumber(prev.infants);
+            let newInfants = prev.infants;
+            if (curInfantNum > newAdultNum) {
+                newInfants = newAdultNum <= 6 ? newAdultNum : '>6';
+            }
+            return {
+                ...prev,
+                adults: newAdults,
+                infants: newInfants,
+            };
+        });
+    };
+
+    const handleInfantsChange = (newInfants) => {
+        const adultNum = getAdultCount(travellers.adults);
+        const newInfantNum = toNumber(newInfants);
+
+        if (newInfantNum > adultNum) {
+            alert('Number of infants cannot exceed number of adults.');
+            return;
+        }
+
+        setTravellers((prev) => ({
+            ...prev,
+            infants: newInfants,
+        }));
+    };
+
     const validateTravellers = () => {
         const { adults, children, infants } = travellers;
 
-        const adultCount = adults === '>9' ? 9 : Number(adults);
-        const childrenCount = children === '>6' ? 6 : Number(children);
-        const infantsCount = infants === '>6' ? 6 : Number(infants);
+        const adultCount = getAdultCount(adults);
+        const childrenCount = getChildCount(children);
+        const infantsCount = getInfantCount(infants);
 
         if (adultCount < 1) {
             alert('At least 1 adult is required for the booking.');
@@ -218,19 +325,26 @@ function BookingForm() {
 
         if (infantsCount > adultCount) {
             alert('Number of infants cannot exceed number of adults.');
+            setTravellers((prev) => ({
+                ...prev,
+                infants: adultCount <= 6 ? adultCount : '>6',
+            }));
             return;
         }
 
-        const totalTravellers = adultCount + childrenCount + infantsCount;
-        if (totalTravellers > 20) {
+        const total = adultCount + childrenCount + infantsCount;
+        if (total > 20) {
             alert('Maximum 20 travelers allowed.');
             return;
         }
 
-        setTravellers({ adults: adultCount, children: childrenCount, infants: infantsCount });
+        const normalizedAdults = toNumber(adults);
+        const normalizedChildren = toNumber(children);
+        const normalizedInfants = toNumber(infants);
+
         setFlightSearchInfo(prev => ({
             ...prev,
-            traveller: { adults: adultCount, children: childrenCount, infants: infantsCount }
+            traveller: { adults: normalizedAdults, children: normalizedChildren, infants: normalizedInfants }
         }));
         setShowTravellerBox(false);
     };
@@ -257,7 +371,7 @@ function BookingForm() {
             },
         ];
 
-        if (tripType === "ROUND_TRIP" && flightSearchInfo.return) {
+        if ((tripType === "ROUND_TRIP" || tripType === "SPECIAL_ROUND_TRIP") && flightSearchInfo.return) {
             tripInfo.push({
                 Origin: flightSearchInfo.to.airportCode,
                 Destination: flightSearchInfo.from.airportCode,
@@ -266,15 +380,17 @@ function BookingForm() {
             });
         }
 
+        const bookingTypeVal = tripType === "SPECIAL_ROUND_TRIP" ? 2 : tripType === "ROUND_TRIP" ? 1 : 0;
+
         return {
             TripInfo: tripInfo,
             TravelType: isInternational ? 1 : 0,
-            BookingType: tripType === "ROUND_TRIP" ? 1 : 0,
+            BookingType: bookingTypeVal,
             CabinClass: flightSearchInfo.coach,
-            AdultCount: travellers.adults,
-            ChildCount: travellers.children,
-            InfantCount: travellers.infants,
-            SrCitizenSearch: false,
+            AdultCount: toNumber(travellers.adults),
+            ChildCount: toNumber(travellers.children),
+            InfantCount: toNumber(travellers.infants),
+            SrCitizenSearch: fareType === "senior",
             StudentFareSearch: fareType === "student",
             Filtered_Airline: [{ Airline_Code: "" }],
         };
@@ -292,11 +408,19 @@ function BookingForm() {
 
         if (!depart) return alert('Please select a departure date');
 
-        if (tripType === 'ROUND_TRIP' && !flightSearchInfo.return) {
+        if ((tripType === 'ROUND_TRIP' || tripType === 'SPECIAL_ROUND_TRIP') && !flightSearchInfo.return) {
             return alert('Please select a return date for the round trip.');
         }
 
         if (!traveller) return alert('Please select travelers');
+
+        const adultCount = getAdultCount(travellers.adults);
+        const infantsCount = getInfantCount(travellers.infants);
+        if (infantsCount > adultCount) {
+            alert('Number of infants cannot exceed number of adults.');
+            return false;
+        }
+
         if (coach === null || coach === undefined) return alert('Please select a travel class');
 
         return true;
@@ -331,16 +455,16 @@ function BookingForm() {
     };
 
     return (
-        <div className="relative grid grid-cols-12 gap-4 sm:gap-6 md:gap-8 bg-no-repeat bg-cover bg-center rounded-[30px] md:rounded-[45px] shadow-[0_10px_30px_rgba(0,0,0,0.5)]"
+        <div className="relative grid grid-cols-12 gap-4 sm:gap-6 md:gap-8 bg-no-repeat bg-cover bg-center rounded-[30px] md:rounded-[45px] shadow-[0_10px_30px_rgba(0,0,0,0.35)]"
             style={{ backgroundImage: `url(${BookingFlightFormBg})` }}
         >
             <img
-                className="absolute -right-2 top-1/2 -translate-y-1/2 h-[77%] hidden lg:block"
+                className="absolute -right-3 top-1/2 -translate-y-1/2 h-[80%] pointer-events-none hidden lg:block select-none z-10"
                 src={RipSide}
                 alt="ribbon side"
             />
 
-            <div className="col-span-12 p-4 sm:p-6 lg:pt-10 lg:pb-5 lg:px-10 ">
+            <div className="col-span-12 p-6 sm:p-8 lg:p-10">
                 {/* Tabs */}
                 <div className="flex flex-wrap items-center gap-2 sm:gap-3 mb-4 text-black text-base sm:text-lg font-semibold">
                     <button className=" flex items-center space-x-1 bg-[#D9D9D9] rounded-md px-2 xs:px-4 py-1 cursor-pointer text-black border-2 border-black">
@@ -371,6 +495,7 @@ function BookingForm() {
                     {[
                         { key: 0, value: 'ONE_WAY', label: 'One Way' },
                         { key: 1, value: 'ROUND_TRIP', label: 'Round Trip' },
+                        { key: 2, value: 'SPECIAL_ROUND_TRIP', label: 'Special Round Trip' },
                         // { key: 3, value: 'MULTI_CITY', label: 'Multi-City' },
                     ].map(({ key, value, label }) => (
                         <label key={key} className="flex items-center cursor-pointer">
@@ -380,7 +505,7 @@ function BookingForm() {
                                     name="tripType"
                                     value={value}
                                     checked={tripType === value}
-                                    onChange={(e) => setTripType(e.target.value)}
+                                    onChange={(e) => handleTripTypeChange(e.target.value)}
                                     className="w-4 h-4 mr-2"
                                 />
                                 <span>{label}</span>
@@ -459,31 +584,45 @@ function BookingForm() {
                         <div className="col-span-12 sm:col-span-6 md:col-span-2">
                             <label className="block text-lg text-gray-700">From</label>
                             <Select
-                                options={fromAirportOptions}
+                                options={debouncedFrom?.trim().length >= 1 ? fromAirportOptions : []}
                                 isLoading={fromLoading}
                                 loadingMessage={() => (
                                     <div className="flex justify-center py-3">
                                         <div className="w-5 h-5 border-2 border-gray-400 border-t-transparent rounded-full animate-spin"></div>
                                     </div>
                                 )}
-                                noOptionsMessage={() => debouncedFrom.length === 0 ? null : "No airports found"}
+                                noOptionsMessage={() => !debouncedFrom?.trim() ? null : "No airports found"}
+                                onMenuOpen={() => {
+                                    setFromSearch("");
+                                    setDebouncedFrom("");
+                                }}
                                 onInputChange={(value, { action }) => {
                                     if (action === "input-change") {
                                         setFromSearch(value);
+                                    } else if (action === "menu-close" || action === "set-value") {
+                                        setFromSearch("");
+                                        setDebouncedFrom("");
                                     }
+                                }}
+                                onMenuClose={() => {
+                                    setFromSearch("");
+                                    setDebouncedFrom("");
                                 }}
                                 value={flightSearchInfo.from}
                                 onChange={(option) => {
-                                    handleFlightInputChange("from", option)
+                                    handleFlightInputChange("from", option);
+                                    setFromSearch("");
+                                    setDebouncedFrom("");
                                 }}
                                 placeholder="Origin"
                                 isSearchable
                                 filterOption={null}
                                 menuPlacement="top"
-                                getOptionLabel={(option) => `${option.city} - ${option.airportName}`}
+                                getOptionLabel={(option) => `${option.city} ${option.airportCode} ${option.airportName}`}
                                 getOptionValue={(option) => option.airportCode}
                                 components={{
                                     Option: CustomOption,
+                                    SingleValue: CustomSingleValue,
                                     DropdownIndicator: () => null,
                                     IndicatorSeparator: () => null,
                                     LoadingIndicator: () => null
@@ -498,28 +637,62 @@ function BookingForm() {
                                         borderColor: state.isFocused ? "#3b82f6" : "#9ca3af",
                                         borderRadius: 0,
                                         boxShadow: "none",
-                                        padding: "2px 0",
-                                        fontSize: "1.25rem",
+                                        padding: "0px",
+                                        minHeight: "44px",
                                         color: "#525252",
                                         "&:hover": { borderColor: "#3b82f6" },
+                                    }),
+                                    valueContainer: (base) => ({
+                                        ...base,
+                                        padding: "2px 0",
+                                        overflow: "hidden",
+                                    }),
+                                    singleValue: (base, state) => ({
+                                        ...base,
+                                        position: "relative",
+                                        transform: "none",
+                                        maxWidth: "100%",
+                                        margin: "0",
+                                        display: (state.selectProps.inputValue || state.isFocused || state.selectProps.menuIsOpen) ? "none" : "block",
+                                    }),
+                                    placeholder: (base) => ({
+                                        ...base,
+                                        fontSize: "1.15rem",
+                                        color: "#808080",
+                                        margin: "0",
+                                    }),
+                                    input: (base) => ({
+                                        ...base,
+                                        margin: "0",
+                                        padding: "0",
+                                        fontSize: "1.1rem",
+                                        color: "#111827",
                                     }),
                                     option: (base, state) => ({
                                         ...base,
                                         backgroundColor: state.isFocused
-                                            ? "#e5e7eb" // light gray on hover
-                                            : "transparent", // keep selected option background transparent
+                                            ? "#f3f4f6"
+                                            : "transparent",
                                         color: "#111827",
                                         cursor: "pointer",
-                                        "&:active": { backgroundColor: "#d1d5db" },
+                                        padding: "6px 8px",
+                                        borderRadius: "10px",
+                                        "&:active": { backgroundColor: "#e5e7eb" },
                                     }),
                                     menu: (base) => ({
                                         ...base,
                                         zIndex: 50,
-                                        width: "400px",
+                                        width: "420px",
+                                        borderRadius: "14px",
+                                        padding: "6px",
+                                        boxShadow: "0 10px 25px -5px rgba(0, 0, 0, 0.15), 0 8px 10px -6px rgba(0, 0, 0, 0.1)",
+                                        border: "1px solid #e5e7eb",
+                                        backgroundColor: "#ffffff",
                                     }),
                                     menuList: (base) => ({
                                         ...base,
                                         padding: 0,
+                                        maxHeight: "280px",
                                     }),
                                 }}
                             />
@@ -550,31 +723,45 @@ function BookingForm() {
                         <div className="col-span-12 sm:col-span-6 md:col-span-2">
                             <label className="block text-lg text-gray-700">To</label>
                             <Select
-                                options={toAirportOptions}
-                                noOptionsMessage={() => debouncedTo.length === 0 ? null : "No airports found"}
+                                options={debouncedTo?.trim().length >= 1 ? toAirportOptions : []}
+                                noOptionsMessage={() => !debouncedTo?.trim() ? null : "No airports found"}
                                 isLoading={toLoading}
                                 loadingMessage={() => (
                                     <div className="flex justify-center py-3">
                                         <div className="w-5 h-5 border-2 border-gray-400 border-t-transparent rounded-full animate-spin"></div>
                                     </div>
                                 )}
+                                onMenuOpen={() => {
+                                    setToSearch("");
+                                    setDebouncedTo("");
+                                }}
                                 onInputChange={(value, { action }) => {
                                     if (action === "input-change") {
                                         setToSearch(value);
+                                    } else if (action === "menu-close" || action === "set-value") {
+                                        setToSearch("");
+                                        setDebouncedTo("");
                                     }
+                                }}
+                                onMenuClose={() => {
+                                    setToSearch("");
+                                    setDebouncedTo("");
                                 }}
                                 value={flightSearchInfo.to}
                                 onChange={(option) => {
-                                    handleFlightInputChange("to", option)
+                                    handleFlightInputChange("to", option);
+                                    setToSearch("");
+                                    setDebouncedTo("");
                                 }}
                                 placeholder="Destination"
                                 isSearchable
                                 filterOption={null}
                                 menuPlacement="top"
-                                getOptionLabel={(option) => `${option.city} - ${option.airportName}`}
+                                getOptionLabel={(option) => `${option.city} ${option.airportCode} ${option.airportName}`}
                                 getOptionValue={(option) => option.airportCode}
                                 components={{
                                     Option: CustomOption,
+                                    SingleValue: CustomSingleValue,
                                     DropdownIndicator: () => null,
                                     IndicatorSeparator: () => null,
                                     LoadingIndicator: () => null
@@ -589,26 +776,60 @@ function BookingForm() {
                                         borderColor: state.isFocused ? "#3b82f6" : "#9ca3af",
                                         borderRadius: 0,
                                         boxShadow: "none",
-                                        padding: "2px 0",
-                                        fontSize: "1.25rem",
+                                        padding: "0px",
+                                        minHeight: "44px",
                                         color: "#525252",
                                         "&:hover": { borderColor: "#3b82f6" },
                                     }),
+                                    valueContainer: (base) => ({
+                                        ...base,
+                                        padding: "2px 0",
+                                        overflow: "hidden",
+                                    }),
+                                    singleValue: (base, state) => ({
+                                        ...base,
+                                        position: "relative",
+                                        transform: "none",
+                                        maxWidth: "100%",
+                                        margin: "0",
+                                        display: (state.selectProps.inputValue || state.isFocused || state.selectProps.menuIsOpen) ? "none" : "block",
+                                    }),
+                                    placeholder: (base) => ({
+                                        ...base,
+                                        fontSize: "1.15rem",
+                                        color: "#808080",
+                                        margin: "0",
+                                    }),
+                                    input: (base) => ({
+                                        ...base,
+                                        margin: "0",
+                                        padding: "0",
+                                        fontSize: "1.1rem",
+                                        color: "#111827",
+                                    }),
                                     option: (base, state) => ({
                                         ...base,
-                                        backgroundColor: state.isFocused ? "#e5e7eb" : "transparent",
+                                        backgroundColor: state.isFocused ? "#f3f4f6" : "transparent",
                                         color: "#111827",
                                         cursor: "pointer",
+                                        padding: "6px 8px",
+                                        borderRadius: "10px",
                                         "&:active": { backgroundColor: "#d1d5db" },
                                     }),
                                     menu: (base) => ({
                                         ...base,
                                         zIndex: 50,
-                                        width: "400px",
+                                        width: "420px",
+                                        borderRadius: "14px",
+                                        padding: "6px",
+                                        boxShadow: "0 10px 25px -5px rgba(0, 0, 0, 0.15), 0 8px 10px -6px rgba(0, 0, 0, 0.1)",
+                                        border: "1px solid #e5e7eb",
+                                        backgroundColor: "#ffffff",
                                     }),
                                     menuList: (base) => ({
                                         ...base,
                                         padding: 0,
+                                        maxHeight: "280px",
                                     }),
                                 }}
                             />
@@ -623,10 +844,10 @@ function BookingForm() {
                             <input
                                 type="text"
                                 readOnly
-                                value={departSelected ? format(departSelected, "PPP") : ""}
+                                value={departSelected ? format(departSelected, "dd/MM/yyyy") : ""}
                                 placeholder="Select Depart"
                                 onClick={() => setDepartOpen(!departOpen)}
-                                className="w-full text-xl text-[#525252] border-b focus:outline-none placeholder-[#808080] p-2 cursor-pointer"
+                                className="w-full text-base sm:text-[17px] font-bold text-[#333333] border-b focus:outline-none placeholder-[#808080] py-2 px-0 cursor-pointer bg-transparent"
                             />
 
                             {departOpen && (
@@ -662,10 +883,10 @@ function BookingForm() {
                             <input
                                 type="text"
                                 readOnly
-                                value={flightSearchInfo.return ? format(flightSearchInfo.return, "PPP") : ""}
+                                value={flightSearchInfo.return ? format(flightSearchInfo.return, "dd/MM/yyyy") : ""}
                                 placeholder="Select Return"
                                 onClick={() => setReturnOpen(!returnOpen)}
-                                className="w-full text-xl text-[#525252] border-b focus:outline-none placeholder-[#808080] p-2 cursor-pointer"
+                                className="w-full text-base sm:text-[17px] font-bold text-[#333333] border-b focus:outline-none placeholder-[#808080] py-2 px-0 cursor-pointer bg-transparent"
                             />
 
                             {returnOpen && (
@@ -685,24 +906,28 @@ function BookingForm() {
                         </div>
 
                         {/* Traveler */}
-                        <div className="col-span-12 sm:col-span-6 md:col-span-2 mt-4 sm:mt-0 flex items-center relative">
+                        <div
+                            ref={travellerBoxRef}
+                            className="col-span-12 sm:col-span-6 md:col-span-2 mt-4 sm:mt-0 flex relative"
+                        >
                             <img src={Person} alt="traveler" className="w-6 h-6 mr-3" />
-                            <div className="flex flex-col">
-                                <label className="block text-lg text-gray-700 flex items-center gap-2">Traveler</label>
+                            <div
+                                className="flex flex-col cursor-pointer"
+                                onClick={() => setShowTravellerBox(prev => !prev)}
+                            >
+                                <label className="block text-lg text-gray-700 flex items-center gap-2 cursor-pointer">Traveler</label>
                                 <input
                                     type="number"
                                     min="1"
+                                    readOnly
                                     placeholder="1"
-                                    value={flightSearchInfo.traveller !== 1 ? flightSearchInfo.traveller.adults + flightSearchInfo.traveller.children : 1}
-                                    onFocus={() => setShowTravellerBox(true)}
-                                    onChange={(e) => handleFlightInputChange('traveller', Number(e.target.value))}
-                                    className="w-16 text-xl border text-[#525252] border-gray-400 rounded-md text-center focus:outline-none [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none[appearance:textfield]"
+                                    value={totalTravellers || 1}
+                                    className="w-16 text-xl border text-[#525252] border-gray-400 rounded-md text-center focus:outline-none cursor-pointer [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none[appearance:textfield]"
                                 />
                             </div>
 
                             {showTravellerBox && (
                                 <div
-                                    ref={travellerBoxRef}
                                     className="absolute bottom-15 right-0 z-50 mt-2 w-[45rem] bg-white rounded-md shadow-lg px-6 py-5 space-y-6 text-black"
                                 >
                                     {/* Adults */}
@@ -715,8 +940,8 @@ function BookingForm() {
                                                 {Array.from({ length: 9 }).map((_, i) => (
                                                     <div
                                                         key={i}
-                                                        onClick={() => setTravellers((t) => ({ ...t, adults: i + 1 }))}
-                                                        className={`px-3 py-2 text-sm cursor-pointer border-r last:border-r-0 ${travellers.adults === i + 1 ? 'bg-[#78080B] text-white' : 'hover:bg-gray-100'
+                                                        onClick={() => handleAdultsChange(i + 1)}
+                                                        className={`px-3 py-2 text-sm cursor-pointer border-r last:border-r-0 ${(Number(travellers.adults) === i + 1 && travellers.adults !== '>9' && Number(travellers.adults) < 10) ? 'bg-[#78080B] text-white' : 'hover:bg-gray-100'
                                                             }`}
                                                     >
                                                         {i + 1}
@@ -724,8 +949,8 @@ function BookingForm() {
                                                 ))}
                                             </div>
                                             <div
-                                                onClick={() => setTravellers((t) => ({ ...t, adults: '>9' }))}
-                                                className={`px-4 py-2 text-sm cursor-pointer border rounded-md ${travellers.adults === '>9' ? 'bg-[#78080B] text-white' : 'hover:bg-gray-100'
+                                                onClick={() => handleAdultsChange('>9')}
+                                                className={`px-4 py-2 text-sm cursor-pointer border rounded-md ${(travellers.adults === '>9' || Number(travellers.adults) >= 10) ? 'bg-[#78080B] text-white' : 'hover:bg-gray-100'
                                                     }`}
                                             >
                                                 &gt;9
@@ -746,7 +971,7 @@ function BookingForm() {
                                                         <div
                                                             key={i}
                                                             onClick={() => setTravellers((t) => ({ ...t, children: i }))}
-                                                            className={`px-3 py-2 text-sm cursor-pointer border-r last:border-r-0 ${travellers.children === i ? 'bg-[#78080B] text-white' : 'hover:bg-gray-100'
+                                                            className={`px-3 py-2 text-sm cursor-pointer border-r last:border-r-0 ${(Number(travellers.children) === i && travellers.children !== '>6' && Number(travellers.children) < 7) ? 'bg-[#78080B] text-white' : 'hover:bg-gray-100'
                                                                 }`}
                                                         >
                                                             {i}
@@ -755,7 +980,7 @@ function BookingForm() {
                                                 </div>
                                                 <div
                                                     onClick={() => setTravellers((t) => ({ ...t, children: '>6' }))}
-                                                    className={`ml-4 px-4 py-2 text-sm cursor-pointer border rounded-md ${travellers.children === '>6' ? 'bg-[#78080B] text-white' : 'hover:bg-gray-100'
+                                                    className={`ml-4 px-4 py-2 text-sm cursor-pointer border rounded-md ${(travellers.children === '>6' || Number(travellers.children) >= 7) ? 'bg-[#78080B] text-white' : 'hover:bg-gray-100'
                                                         }`}
                                                 >
                                                     &gt;6
@@ -770,24 +995,46 @@ function BookingForm() {
                                             </p>
                                             <div className="flex justify-between items-start mt-2">
                                                 <div className="mr-4 flex border rounded-md overflow-hidden">
-                                                    {Array.from({ length: 6 }).map((_, i) => (
-                                                        <div
-                                                            key={i}
-                                                            onClick={() => setTravellers((t) => ({ ...t, infants: i }))}
-                                                            className={`px-3 py-2 text-sm cursor-pointer border-r last:border-r-0 ${travellers.infants === i ? 'bg-[#78080B] text-white' : 'hover:bg-gray-100'
+                                                    {Array.from({ length: 6 }).map((_, i) => {
+                                                        const isInfantDisabled = i > getAdultCount(travellers.adults);
+                                                        const isSelected = Number(travellers.infants) === i && travellers.infants !== '>6' && Number(travellers.infants) < 7;
+                                                        return (
+                                                            <div
+                                                                key={i}
+                                                                onClick={() => !isInfantDisabled && handleInfantsChange(i)}
+                                                                title={isInfantDisabled ? "Number of infants cannot exceed number of adults" : undefined}
+                                                                className={`px-3 py-2 text-sm border-r last:border-r-0 transition-colors ${
+                                                                    isSelected
+                                                                        ? 'bg-[#78080B] text-white font-medium'
+                                                                        : isInfantDisabled
+                                                                        ? 'opacity-30 cursor-not-allowed bg-gray-100 text-gray-400 select-none'
+                                                                        : 'cursor-pointer hover:bg-gray-100'
                                                                 }`}
+                                                            >
+                                                                {i}
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                                {(() => {
+                                                    const isMoreThan6Disabled = getAdultCount(travellers.adults) < 7;
+                                                    const isSelected = travellers.infants === '>6' || Number(travellers.infants) >= 7;
+                                                    return (
+                                                        <div
+                                                            onClick={() => !isMoreThan6Disabled && handleInfantsChange('>6')}
+                                                            title={isMoreThan6Disabled ? "Number of infants cannot exceed number of adults" : undefined}
+                                                            className={`px-4 py-2 text-sm border rounded-md transition-colors ${
+                                                                isSelected
+                                                                    ? 'bg-[#78080B] text-white font-medium'
+                                                                    : isMoreThan6Disabled
+                                                                    ? 'opacity-30 cursor-not-allowed bg-gray-100 text-gray-400 select-none'
+                                                                    : 'cursor-pointer hover:bg-gray-100'
+                                                            }`}
                                                         >
-                                                            {i}
+                                                            &gt;6
                                                         </div>
-                                                    ))}
-                                                </div>
-                                                <div
-                                                    onClick={() => setTravellers((t) => ({ ...t, infants: '>6' }))}
-                                                    className={`px-4 py-2 text-sm cursor-pointer border rounded-md ${travellers.infants === '>6' ? 'bg-[#78080B] text-white' : 'hover:bg-gray-100'
-                                                        }`}
-                                                >
-                                                    &gt;6
-                                                </div>
+                                                    );
+                                                })()}
                                             </div>
                                         </div>
                                     </div>
@@ -820,28 +1067,55 @@ function BookingForm() {
                 {/* Bottom Row */}
                 <div className="fare-filter-section pt-6 flex flex-wrap items-center justify-between gap-3 sm:gap-4">
                     <div className="flex flex-wrap items-center gap-4 sm:gap-6 justify-center sm:justify-start w-full sm:w-auto">
-                        <label className="flex items-center space-x-2">
+                        <label className="flex items-center space-x-2 cursor-pointer">
                             <input type="radio" name="fareType" value="regular" checked={fareType === 'regular'} onChange={(e) => setFareType(e.target.value)} className="w-4 h-4 cursor-pointer" />
                             <span className="text-gray-700">Regular Fare</span>
                         </label>
-                        <label className="flex items-center space-x-2">
+                        <label className="flex items-center space-x-2 cursor-pointer">
                             <input type="radio" name="fareType" value="student" checked={fareType === 'student'} onChange={(e) => setFareType(e.target.value)} className="w-4 h-4 cursor-pointer" />
                             <span className="text-gray-700">Student Fare</span>
+                        </label>
+                        <label className="flex items-center space-x-2 cursor-pointer">
+                            <input type="radio" name="fareType" value="senior" checked={fareType === 'senior'} onChange={(e) => setFareType(e.target.value)} className="w-4 h-4 cursor-pointer" />
+                            <span className="text-gray-700">Senior Citizen Fare</span>
                         </label>
                     </div>
 
                     <div className="flex flex-wrap items-center gap-3 justify-center sm:justify-end w-full sm:w-auto">
-                        <button className="flex items-center space-x-2 text-gray-600 hover:text-black hover:border-black border-b border-b-2 pb-1 border-gray-300">
+                        <button
+                            type="button"
+                            onClick={() => {
+                                if (isLoggedIn) {
+                                    window.location.href = '/my-bookings';
+                                } else {
+                                    setIsSignInModalOpen(true);
+                                }
+                            }}
+                            className="flex items-center space-x-2 text-gray-600 hover:text-black hover:border-black border-b-2 pb-1 border-gray-300 cursor-pointer transition-colors"
+                        >
                             <Calendar className="w-4 h-4" />
-                            <span className="text-sm">My Booking</span>
+                            <span className="text-sm font-medium">My Booking</span>
                         </button>
-                        <button className="flex items-center space-x-2 text-gray-600 hover:text-black">
+                        <button
+                            type="button"
+                            className="flex items-center space-x-2 text-gray-600 hover:text-black cursor-pointer"
+                        >
                             <CirclePlus className="w-4 h-4" />
-                            <span className="text-sm">Flight Status</span>
+                            <span className="text-sm font-medium">Flight Status</span>
                         </button>
                     </div>
                 </div>
             </div >
+
+            {isSignInModalOpen && (
+                <SignInModal
+                    onClose={() => setIsSignInModalOpen(false)}
+                    onSuccess={() => {
+                        setIsSignInModalOpen(false);
+                        window.location.href = '/my-bookings';
+                    }}
+                />
+            )}
         </div >
     );
 }

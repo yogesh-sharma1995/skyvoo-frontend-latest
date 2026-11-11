@@ -6,6 +6,17 @@ import { ChevronRight } from 'lucide-react';
 export default function TicketDetailsReviewModal({ onClose }) {
     const navigate = useNavigate();
 
+    React.useEffect(() => {
+        const originalBodyOverflow = document.body.style.overflow;
+        const originalHtmlOverflow = document.documentElement.style.overflow;
+        document.body.style.overflow = "hidden";
+        document.documentElement.style.overflow = "hidden";
+        return () => {
+            document.body.style.overflow = originalBodyOverflow;
+            document.documentElement.style.overflow = originalHtmlOverflow;
+        };
+    }, []);
+
     return (
         <div className=" fixed inset-0 z-[9999] bg-black/50 flex items-center justify-center px-2 sm:px-4"
             style={{ animation: "fadeIn 0.3s ease-out forwards" }}

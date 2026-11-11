@@ -1,0 +1,11 @@
+export { default as ETicket } from './ETicket';
+export { default as TicketHeader } from './TicketHeader';
+export { default as BookingDetailsSection } from './BookingDetailsSection';
+export { default as PassengerDetails } from './PassengerDetails';
+export { default as FlightDetails } from './FlightDetails';
+export { default as AncillaryDetails } from './AncillaryDetails';
+export { default as PaymentDetails } from './PaymentDetails';
+export { default as ImportantInformation } from './ImportantInformation';
+export { default as TicketFooter } from './TicketFooter';
+export { mapBookingDetailToTicket } from './mapBookingToTicket';
+export { default } from './ETicket';

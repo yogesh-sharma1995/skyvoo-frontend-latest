@@ -1,10 +1,21 @@
 import React, { useState, useMemo } from 'react';
+import { Navigate } from 'react-router-dom';
 import { Plus, X, Plane, Globe, Trash2, AlertCircle, Search, CheckCircle2, Loader2 } from 'lucide-react';
 import Select, { components } from 'react-select';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '@/services/api.js';
+import { useAuth } from '@/contexts/AuthContext';
 
 function MarkUp() {
+    const { user, isB2B: authIsB2B } = useAuth();
+    const rawUserType = (user?.UserType || user?.userType || user?.Role || user?.role || "").toLowerCase();
+    const isB2C = rawUserType === "b2c";
+    const isB2B = (authIsB2B || rawUserType === "b2b") && !isB2C;
+
+    if (isB2C || !isB2B) {
+        return <Navigate to="/my-profile" replace />;
+    }
+
     const queryClient = useQueryClient();
     const [searchTerm, setSearchTerm] = useState('');
     const [isModalOpen, setIsModalOpen] = useState(false);
@@ -252,7 +263,7 @@ function MarkUp() {
 
     return (
         <>
-            <div className="relative max-w-6xl mx-auto z-888 px-4 sm:px-6 lg:px-8 py-6">
+            <div className="relative max-w-7xl mx-auto z-888 px-4 sm:px-6 py-6 sm:py-8">
                 {/* Header */}
                 <div className="mb-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
                     <div>

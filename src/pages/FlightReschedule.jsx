@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import { Plane, Clock, MapPin, Check } from "lucide-react";
 import { DayPicker } from "react-day-picker";
+import { addDays, startOfToday } from "date-fns";
 import Header from '@/components/layout/Header';
 import "react-day-picker/dist/style.css";
 import GrayFadedBg from '@/assets/imgs/grayfadedbg.webp';
@@ -8,9 +9,13 @@ import GrayFadedBg from '@/assets/imgs/grayfadedbg.webp';
 export default function Reschedule() {
     const [isShowResults, setIsShowResults] = useState(false);
     const [isDepartPickerOpen, setIsDepartPickerOpen] = useState(false);
-    const [selectedDay, setSelectedDay] = useState(new Date("2025-11-20"));
+    const [selectedDay, setSelectedDay] = useState(() => new Date());
     const [formattedDate, setFormattedDate] = useState("");
     const [showMoreTripInfo, setShowMoreTripInfo] = useState(false);
+    const departRef = useRef(null);
+
+    const today = useMemo(() => startOfToday(), []);
+    const maxRescheduleDate = useMemo(() => addDays(today, 90), [today]);
 
     const tripData = {
         bookingRef: "FLT789456",
@@ -35,6 +40,16 @@ export default function Reschedule() {
     useEffect(() => {
         if (selectedDay) setFormattedDate(formatDate(selectedDay));
     }, [selectedDay]);
+
+    useEffect(() => {
+        const handleClickOutside = (e) => {
+            if (departRef.current && !departRef.current.contains(e.target)) {
+                setIsDepartPickerOpen(false);
+            }
+        };
+        document.addEventListener("mousedown", handleClickOutside);
+        return () => document.removeEventListener("mousedown", handleClickOutside);
+    }, []);
 
 
     const handleProceed = () => {
@@ -182,7 +197,7 @@ export default function Reschedule() {
                                 <p className="text-xl font-bold mt-1">{formatDate("2025-11-20")}</p>
                             </div>
 
-                            <div className="border-r border-gray-200 pr-6 relative">
+                            <div className="border-r border-gray-200 pr-6 relative" ref={departRef}>
                                 <h3 className="text-blue-400 text-sm font-medium mb-4">NEW DEPARTURE</h3>
 
                                 <div
@@ -200,12 +215,22 @@ export default function Reschedule() {
                                         <DayPicker
                                             mode="single"
                                             selected={selectedDay}
-                                            onSelect={(day) => day && setSelectedDay(day)}
+                                            onSelect={(day) => {
+                                                if (day) {
+                                                    setSelectedDay(day);
+                                                    setIsDepartPickerOpen(false);
+                                                }
+                                            }}
                                             numberOfMonths={2}
                                             captionLayout="dropdown-buttons"
                                             className="text-gray-800"
                                             classNames={{ months: "flex gap-4" }}
-                                            disabled={{ before: new Date() }}
+                                            disabled={{
+                                                before: today,
+                                                after: maxRescheduleDate,
+                                            }}
+                                            fromMonth={today}
+                                            toMonth={maxRescheduleDate}
                                         />
 
                                     </div>
@@ -264,7 +289,7 @@ export default function Reschedule() {
                                         <div className="flex flex-col items-center px-4">
                                             <div className="flex items-center gap-2 mb-1">
                                                 <div className="w-16 h-0.5 bg-gradient-to-r from-blue-400 to-purple-400"></div>
-                                                <Plane size={20} className="text-indigo-600 rotate-90" />
+                                                <Plane size={20} className="text-indigo-600 rotate-45" />
                                                 <div className="w-16 h-0.5 bg-gradient-to-r from-purple-400 to-pink-400"></div>
                                             </div>
                                             <span className="text-xs text-gray-500 font-medium">{flight.duration}</span>

@@ -1,4 +1,6 @@
 import { useMemo } from "react";
+import { getFlightDisplayPrice } from "@/utils/fareCalculations";
+import { getFlightStops, formatStopsLabel, formatFlightStops, isSpecialRoundTripFlight, getSpecialRoundTripLegGroups } from "@/utils/flightStops";
 
 const TimeRanges = {
     "Early Morning": { start: 0, end: 6 },
@@ -23,18 +25,28 @@ export function useFilteredFlights({ flights, filters, sorting }) {
         /* ---------------- FILTERING ---------------- */
         let result = flights.filter((flight) => {
 
-            const airlineCode = flight.AirlineCodeAndId?.split("-")[0] || "";
+            const flightCodes = [
+                ...(flight.AirlineLogo || []),
+                ...(flight.FlightDetailResponses || flight.flightDetailResponses || []).map(l => l.airlineCode || l.AirlineCode)
+            ].filter(Boolean);
+            const uniqueCodes = [...new Set(flightCodes.length > 0 ? flightCodes : [flight.AirlineCodeAndId?.split("-")[0] || flight.AirlineCode || ""])];
 
-            const lowestFare = flight.AirlineMinNetPrice || 0;
-
-            const stopsCount = flight.AirlineStops || 0;
+            const lowestFare = getFlightDisplayPrice(flight);
 
             const depHour = Number(flight.DepartureTime?.split(":")[0]) || 0;
 
-            const arrHour = Number(flight.ArrivalTime?.split(":")[0]) || 0;
+            let arrTimeStr = flight.ArrivalTime;
+            if (isSpecialRoundTripFlight(flight)) {
+                const { onwardLegs } = getSpecialRoundTripLegGroups(flight);
+                const lastOnward = onwardLegs[onwardLegs.length - 1];
+                if (lastOnward?.arrivalTime || lastOnward?.ArrivalTime) {
+                    arrTimeStr = lastOnward.arrivalTime || lastOnward.ArrivalTime;
+                }
+            }
+            const arrHour = Number(arrTimeStr?.split(":")[0]) || 0;
 
             // 1️⃣ Airline filter
-            if (selectedAirlines.length && !selectedAirlines.some(a => a.code === airlineCode)) {
+            if (selectedAirlines.length && !selectedAirlines.some(a => uniqueCodes.includes(a.code))) {
                 return false;
             }
 
@@ -46,12 +58,7 @@ export function useFilteredFlights({ flights, filters, sorting }) {
 
             // 3️⃣ Stops filter
             if (selectedStops.length > 0) {
-                const stopLabel =
-                    stopsCount === 0
-                        ? "Non Stop"
-                        : stopsCount === 1
-                            ? "1 Stop"
-                            : `${stopsCount} Stops`;
+                const stopLabel = formatFlightStops(flight);
 
                 if (!selectedStops.includes(stopLabel)) {
                     return false;
@@ -78,11 +85,11 @@ export function useFilteredFlights({ flights, filters, sorting }) {
 
         switch (sorting) {
             case "CHEAPEST":
-                sorted.sort((a, b) => a.AirlineMinPrice - b.AirlineMinPrice);
+                sorted.sort((a, b) => getFlightDisplayPrice(a) - getFlightDisplayPrice(b));
                 break;
 
             case "NONSTOP":
-                sorted.sort((a, b) => a.AirlineStops - b.AirlineStops);
+                sorted.sort((a, b) => getFlightStops(a) - getFlightStops(b));
                 break;
 
             case "EARLY_DEPARTURE":

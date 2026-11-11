@@ -9,6 +9,7 @@ const initialState = {
     selectedPriceRange: [0, Infinity],
     selectedDepartureTime: null,
     selectedArrivalTime: null,
+    showFareBreakdown: false,
 };
 
 function reducer(state, action) {
@@ -30,6 +31,12 @@ function reducer(state, action) {
 
         case "SET_AIRCRAFT_SIZES":
             return { ...state, selectedAircraftSizes: action.payload };
+
+        case "SET_SHOW_FARE_BREAKDOWN":
+            return { ...state, showFareBreakdown: action.payload };
+
+        case "TOGGLE_SHOW_FARE_BREAKDOWN":
+            return { ...state, showFareBreakdown: !state.showFareBreakdown };
 
         case "RESET_FILTERS":
             return initialState;

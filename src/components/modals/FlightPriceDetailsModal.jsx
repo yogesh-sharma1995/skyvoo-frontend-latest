@@ -8,10 +8,39 @@ import { bookingStore } from '@/store/bookingStore';
 import { Splide, SplideSlide } from '@splidejs/react-splide';
 import "@splidejs/react-splide/css";
 import { getAirlineLogo } from "../../utils/airlineCode";
+import { isSpecialRoundTripFlight, getSpecialRoundTripLegGroups } from '@/utils/flightStops';
 
 export default function FlightPriceDetailsModal({ flight, data, onClose }) {
     const navigate = useNavigate();
     const [searchParams] = useSearchParams();
+
+    const legs = flight?.FlightDetailResponses || flight?.flightDetailResponses || (flight ? [flight] : []);
+    const isSpecialRoundTrip = flight ? isSpecialRoundTripFlight(flight) : false;
+    const { onwardLegs, returnLegs } = isSpecialRoundTrip
+        ? getSpecialRoundTripLegGroups(flight)
+        : { onwardLegs: legs, returnLegs: [] };
+
+    const firstLeg = onwardLegs[0] || legs[0];
+    const lastOnwardLeg = onwardLegs[onwardLegs.length - 1] || legs[0];
+
+    const originCity = firstLeg?.AirlineDeparture?.name || firstLeg?.AirlineDeparture?.city || flight?.AirlineDeparture?.name || flight?.AirlineDeparture?.city || "Departure";
+    const destCity = isSpecialRoundTrip
+        ? (lastOnwardLeg?.AirlineArrival?.name || lastOnwardLeg?.AirlineArrival?.city || "Destination")
+        : (flight?.AirlineArrival?.name || flight?.AirlineArrival?.city || legs[legs.length - 1]?.AirlineArrival?.name || legs[legs.length - 1]?.AirlineArrival?.city || "Arrival");
+
+    const depDate = flight?.DepartureDate || firstLeg?.DepartureDate || firstLeg?.departureDate || "";
+    const returnDate = isSpecialRoundTrip ? (returnLegs[0]?.DepartureDate || returnLegs[0]?.departureDate || "") : "";
+
+    const depTime = firstLeg?.DepartureTime || flight?.DepartureTime || "";
+    const arrTime = isSpecialRoundTrip
+        ? (lastOnwardLeg?.ArrivalTime || "")
+        : (flight?.ArrivalTime || legs[legs.length - 1]?.ArrivalTime || "");
+
+    const primaryAirlineCode = Array.isArray(flight?.AirlineLogo)
+        ? flight.AirlineLogo[0]
+        : (flight?.AirlineCode || firstLeg?.AirlineCode || "");
+    const airlineDisplayName = flight?.AirlineName || firstLeg?.AirlineName || "";
+
     const fareCards = data?.map((item) => ({
         title: item.FareType || "SKYVOO",
         oldPrice: `₹ ${item.PriceList?.TotalFare}`,
@@ -20,8 +49,8 @@ export default function FlightPriceDetailsModal({ flight, data, onClose }) {
         type: "Per adult",
 
         baggage: [
-            `${item.Baggages?.[0]?.HandBag || "N/A"} Cabin Baggage`,
-            `${item.Baggages?.[0]?.CheckIn || item.Baggages?.[0]?.CabinBag || "N/A"} Check-in Baggage`,
+            `${(item.Baggages?.[0]?.CabinBag || item.Baggages?.[0]?.HandBag || "7 Kg").trim()} Cabin Baggage`,
+            `${(item.Baggages?.[0]?.CheckedinBag || item.Baggages?.[0]?.CheckIn || "15 Kg").trim()} Check-in Baggage`,
         ],
 
         flexibility: [
@@ -69,31 +98,42 @@ export default function FlightPriceDetailsModal({ flight, data, onClose }) {
                         Flights Details and Fare Options Available for you !
                     </h2>
 
-                    <div className=" flex flex-wrap items-center gap-x-2 gap-y-1 font-medium text-sm sm:text-base mt-2 ">
-                        <span>New Delhi - Mumbai</span>
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 font-medium text-sm sm:text-base mt-2">
+                        <span>{originCity} {isSpecialRoundTrip ? "⇄" : "→"} {destCity}</span>
+                        {isSpecialRoundTrip && (
+                            <span className="text-xs bg-[#78080B]/10 text-[#78080B] font-bold px-2.5 py-0.5 rounded-full">
+                                Round Trip
+                            </span>
+                        )}
                         <span>|</span>
-                        <img
-                            src={getAirlineLogo(flight.AirlineLogo[0])}
-                            alt={flight.AirlineName?.split(",")[0]}
-                            className="rounded-full w-9 h-9 xs:w-8 xs:h-8"
-                        />
-                        <span>{flight.AirlineName?.split(",")[0]}</span>
+                        {primaryAirlineCode && getAirlineLogo(primaryAirlineCode) && (
+                            <img
+                                src={getAirlineLogo(primaryAirlineCode)}
+                                alt={airlineDisplayName?.split(",")[0] || "airline"}
+                                className="rounded-full w-8 h-8 object-contain bg-white border border-gray-200 p-0.5 shadow-2xs"
+                            />
+                        )}
+                        <span>{airlineDisplayName}</span>
                         <span>|</span>
-                        <span>Wed, 24 Sep 2025</span>
+                        <span>{depDate}{isSpecialRoundTrip && returnDate ? ` – ${returnDate}` : ""}</span>
                         <span className="hidden sm:inline">|</span>
-                        <span className="text-xs sm:text-base">
-                            Departure at 17:00 – Arrival at 19:25
+                        <span className="text-xs sm:text-base text-gray-700">
+                            {isSpecialRoundTrip ? (
+                                <>Outbound: {depTime} → {arrTime}</>
+                            ) : (
+                                <>Departure at {depTime} – Arrival at {arrTime}</>
+                            )}
                         </span>
                     </div>
                 </div>
 
 
-                <div className="my-8">
+                <div className="my-6 relative px-6 sm:px-12">
                     <Splide
-                        className="py-2 sm:py-4"
+                        className="fare-splide py-2 sm:py-4"
                         options={{
                             type: "slide",
-                            rewind: false,
+                            rewind: true,
                             perPage: 3,
                             perMove: 1,
                             gap: "1rem",
@@ -203,6 +243,19 @@ export default function FlightPriceDetailsModal({ flight, data, onClose }) {
                                                         const adults = Number(searchParams.get("adults") || 1);
                                                         const children = Number(searchParams.get("children") || 0);
                                                         const infants = Number(searchParams.get("infants") || 0);
+                                                        const directCountryCodeArr = ["IND", "IN"];
+                                                        const legs = flight?.FlightDetailResponses || flight?.flightDetailResponses || [];
+                                                        const isIntlFlight = legs.some((leg) => {
+                                                            const depC = leg?.AirlineDeparture?.countryCode || leg?.AirlineDeparture?.CountryCode;
+                                                            const arrC = leg?.AirlineArrival?.countryCode || leg?.AirlineArrival?.CountryCode;
+                                                            return (depC && !directCountryCodeArr.includes(String(depC).toUpperCase())) ||
+                                                                (arrC && !directCountryCodeArr.includes(String(arrC).toUpperCase()));
+                                                        });
+                                                        const travelType = Number(
+                                                            searchParams.get("travelType") ??
+                                                            flight?.TravelType ??
+                                                            (isIntlFlight ? 1 : 0)
+                                                        );
 
                                                         // Persist the selected flight + fare to bookingStore
                                                         // before navigating so downstream booking steps
@@ -213,9 +266,13 @@ export default function FlightPriceDetailsModal({ flight, data, onClose }) {
                                                             isRoundTrip: false,
                                                             // FareReviewKey from the chosen fare in TotalPriceList
                                                             fareReviewKey: card._rawFare?.FareReviewKey ?? null,
+                                                            travelType,
                                                             travellers: { adults, children, infants },
+                                                            searchUrl: `/flight-results${window.location.search}`,
+                                                            searchParams: window.location.search,
                                                         });
                                                     }
+                                                    onClose?.();
                                                     navigate('/review-details');
                                                 }}
                                             >
@@ -231,7 +288,7 @@ export default function FlightPriceDetailsModal({ flight, data, onClose }) {
 
             </div>
 
-            {/* Animations */}
+            {/* Animations & Carousel Arrow Styles */}
             <style>
                 {`
           @keyframes fadeIn {
@@ -241,6 +298,51 @@ export default function FlightPriceDetailsModal({ flight, data, onClose }) {
           @keyframes scaleIn {
             from { transform: scale(0.95); }
             to { transform: scale(1); }
+          }
+          .fare-splide .splide__arrows {
+            display: block !important;
+          }
+          .fare-splide .splide__arrow {
+            display: flex !important;
+            align-items: center;
+            justify-content: center;
+            background: #ffffff !important;
+            box-shadow: 0 4px 14px rgba(0, 0, 0, 0.22) !important;
+            width: 2.6rem !important;
+            height: 2.6rem !important;
+            opacity: 1 !important;
+            transition: all 0.2s ease !important;
+            border: 1.5px solid #78080B !important;
+            z-index: 30 !important;
+            cursor: pointer !important;
+          }
+          .fare-splide .splide__arrow:hover {
+            background: #78080B !important;
+            opacity: 1 !important;
+            transform: translateY(-50%) scale(1.08) !important;
+          }
+          .fare-splide .splide__arrow:hover svg {
+            fill: #ffffff !important;
+          }
+          .fare-splide .splide__arrow svg {
+            fill: #78080B !important;
+            width: 1.15rem !important;
+            height: 1.15rem !important;
+            transition: fill 0.2s ease !important;
+          }
+          .fare-splide .splide__arrow--prev {
+            left: -20px !important;
+          }
+          .fare-splide .splide__arrow--next {
+            right: -20px !important;
+          }
+          @media (max-width: 640px) {
+            .fare-splide .splide__arrow--prev {
+              left: -10px !important;
+            }
+            .fare-splide .splide__arrow--next {
+              right: -10px !important;
+            }
           }
         `}
             </style>

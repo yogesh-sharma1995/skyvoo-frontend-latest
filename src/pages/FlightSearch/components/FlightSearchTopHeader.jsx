@@ -62,14 +62,14 @@ const FlightSearchTopHeader = ({ onOpen }) => {
     };
 
     return (
-        <header className="relative z-9997">
-            <div className="max-w-6xl mx-auto flex items-center justify-between sm:px-6 py-5 ">
+        <header className="relative z-9997 bg-white/45 backdrop-blur-lg border-b border-white/50 shadow-[0_4px_30px_rgba(0,0,0,0.04)]">
+            <div className="max-w-7xl mx-auto flex items-center justify-between px-4 sm:px-6 py-1.5 md:py-1.5">
                 {/* Logo */}
                 <div className="flex items-center">
                     <img
                         onClick={() => navigate('/')}
                         src={Logo}
-                        className="cursor-pointer h-12 w-auto"
+                        className="cursor-pointer h-9 sm:h-10 md:h-11 w-auto"
                         alt="SkyVoo Logo"
                     />
                 </div>

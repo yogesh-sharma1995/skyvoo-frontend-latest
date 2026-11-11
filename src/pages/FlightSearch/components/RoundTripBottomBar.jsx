@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { X, Plane, ArrowRight, Ticket } from 'lucide-react';
 import { getAirlineLogo } from "@/utils/airlineCode";
+import { getFlightDisplayPrice } from "@/utils/fareCalculations";
+import { formatFlightStops } from "@/utils/flightStops";
 
 function FlightChip({ flight, label, onClear }) {
     if (!flight) {
@@ -13,6 +15,8 @@ function FlightChip({ flight, label, onClear }) {
             </div>
         );
     }
+
+    const price = getFlightDisplayPrice(flight);
 
     return (
         <div className="relative flex items-center gap-2 sm:gap-3 bg-white/10 border border-white/20 rounded-xl px-3 sm:px-4 py-2 min-w-[140px] sm:min-w-[190px] backdrop-blur-sm">
@@ -55,7 +59,7 @@ function FlightChip({ flight, label, onClear }) {
                     </span>
                 </div>
                 <p className="text-[8px] sm:text-[9px] text-white/50 leading-tight mt-[1px]">
-                    {flight.AirlineDuration} · {flight.AirlineStops === 0 ? 'Non Stop' : `${flight.AirlineStops} Stop`}
+                    {flight.AirlineDuration} · {formatFlightStops(flight)}
                 </p>
             </div>
 
@@ -63,7 +67,7 @@ function FlightChip({ flight, label, onClear }) {
             <div className="flex-shrink-0 text-right">
                 <p className="text-[8px] text-white/40">from</p>
                 <p className="text-[11px] sm:text-sm font-bold text-green-300 leading-tight">
-                    ₹{flight.AirlineMinNetPrice?.toLocaleString('en-IN')}
+                    ₹{price.toLocaleString('en-IN')}
                 </p>
             </div>
         </div>
@@ -73,9 +77,9 @@ function FlightChip({ flight, label, onClear }) {
 function RoundTripBottomBar({ outbound, returnFlight, onClearOutbound, onClearReturn, onBook }) {
     const [visible, setVisible] = useState(false);
 
-    const totalPrice =
-        (outbound?.AirlineMinNetPrice || 0) +
-        (returnFlight?.AirlineMinNetPrice || 0);
+    const outboundPrice = getFlightDisplayPrice(outbound);
+    const returnPrice = getFlightDisplayPrice(returnFlight);
+    const totalPrice = outboundPrice + returnPrice;
 
     const bothSelected = !!outbound && !!returnFlight;
 

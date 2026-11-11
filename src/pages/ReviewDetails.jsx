@@ -7,40 +7,144 @@ import ViewAllCouponsModal from "@/components/modals/ViewAllCouponsModal";
 import BaggageModal from "@/components/modals/BaggageModal";
 import MealModal from "@/components/modals/MealModal";
 import ErrorModal from "@/components/modals/ErrorModal";
+import SignInModal from "@/components/modals/SignInModal";
+import ImportantDisclaimerModal from "@/components/modals/ImportantDisclaimerModal";
+import FareAlertModal from "@/components/modals/FareAlertModal";
 import AirlineLogo from "@/assets/imgs/airlinelogo.webp";
-import { Trash2, User, Luggage, Utensils, CirclePlus, ShieldAlert, ChevronRight, Plus, CheckCircle2, XCircle, Plane, Loader2 } from "lucide-react";
+import { Trash2, User, Luggage, Utensils, CirclePlus, ShieldAlert, ChevronRight, ChevronDown, Plus, CheckCircle2, XCircle, Plane, Loader2, Building2, Mail } from "lucide-react";
 import Select from "react-select";
+import { DatePicker } from "antd";
+import CustomDatePicker from "@/components/common/CustomDatePicker";
+import dayjs from "dayjs";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { countryOptions, stateOptions } from "@/data/ExtraData.js";
+import { nationalityOptions } from "@/data/ExtraData.js";
 import { bookingStore } from "@/store/bookingStore";
 import ReviewDetailsSkeleton from "@/components/layout/ReviewDetailsSkeleton";
+import { useAuth } from "@/contexts/AuthContext";
 const Modal = lazy(() => import("@/components/modals/Modal"));
 const FlightSeatMap = lazy(() => import("./FlightSeatMap/Index"));
 import { getAirlineLogo } from "@/utils/airlineCode";
+import { formatStopsWithLayovers, getFlightLayoverAirports } from "@/utils/flightStops";
+
+const formatDepartureDate = (dateStr) => {
+  if (!dateStr) return "—";
+  const parsed = dayjs(dateStr);
+  return parsed.isValid() ? parsed.format("DD-MM-YYYY") : dateStr;
+};
+
+const formatAirportCityDisplay = (city, code) => {
+  const c = String(city || "").trim();
+  const cd = String(code || "").trim();
+  if (!c && !cd) return "";
+  if (!cd) return c;
+  if (!c) return cd;
+  if (/\([A-Za-z0-9]{3}\)/.test(c) || c.toUpperCase().includes(`(${cd.toUpperCase()})`)) {
+    return c;
+  }
+  if (c.toUpperCase() === cd.toUpperCase()) {
+    return cd.toUpperCase();
+  }
+  return `${c} (${cd.toUpperCase()})`;
+};
+
+const getTravellerNameError = (rawName, fieldLabel = "Name") => {
+  if (!rawName || !rawName.trim()) {
+    return `${fieldLabel} is required`;
+  }
+  return null;
+};
 
 const getTravelType = async (bookingData) => {
   try {
-    const flight = bookingData.isRoundTrip ? bookingData.outboundFlight : bookingData.flight;
-    const originCode = flight?.AirlineDeparture?.code || flight?.DepartureAirportCode || flight?.Origin;
-    const destCode = flight?.AirlineArrival?.code || flight?.ArrivalAirportCode || flight?.Destination;
+    const directCountryCodeArr = ["IND", "IN"];
 
-    if (originCode && destCode) {
-      const [originRes, destRes] = await Promise.all([
-        api.post(`/Flight/ListAirportsByCode?airportCode=${originCode.toUpperCase()}`, {}),
-        api.post(`/Flight/ListAirportsByCode?airportCode=${destCode.toUpperCase()}`, {})
-      ]);
+    // 1. Direct check of URL search params if present
+    if (typeof window !== "undefined") {
+      const sp = new URLSearchParams(window.location.search);
+      const urlTravelType = sp.get("travelType");
+      if (urlTravelType !== null && urlTravelType !== undefined) {
+        return Number(urlTravelType) === 1 ? 1 : 0;
+      }
+    }
 
-      const originCountry = originRes?.data?.Data?.[0]?.CountryCode || flight?.AirlineDeparture?.countryCode || flight?.AirlineDeparture?.CountryCode;
-      const destCountry = destRes?.data?.Data?.[0]?.CountryCode || flight?.AirlineArrival?.countryCode || flight?.AirlineArrival?.CountryCode;
-      const countryCodeArr = ["IND", "IN"];
+    // 2. Direct check of explicit bookingData.travelType (0 = Domestic, 1 = International)
+    if (bookingData?.travelType !== undefined && bookingData?.travelType !== null) {
+      return Number(bookingData.travelType) === 1 ? 1 : 0;
+    }
 
-      const isOriginIndia = countryCodeArr.includes(originCountry?.toUpperCase());
-      const isDestIndia = countryCodeArr.includes(destCountry?.toUpperCase());
+    // 3. Collect all legs from all flights (outbound, return, special round trip combo)
+    const allFlights = [bookingData?.flight, bookingData?.outboundFlight, bookingData?.returnFlight].filter(Boolean);
+    const allLegs = [];
+    allFlights.forEach((fl) => {
+      const legs = fl?.FlightDetailResponses || fl?.flightDetailResponses || [];
+      if (Array.isArray(legs) && legs.length > 0) {
+        allLegs.push(...legs);
+      }
+      if (Array.isArray(fl?.FlightSegments)) {
+        fl.FlightSegments.flat(2).forEach((seg) => {
+          if (seg) allLegs.push(seg);
+        });
+      }
+    });
 
-      // If either origin or destination is not IN or IND, it is an international flight (1), otherwise domestic (0)
-      if (!isOriginIndia || !isDestIndia) {
-        return 1;
-      } else {
+    // Check direct country codes on every leg
+    let hasKnownCountryCodes = false;
+    for (const leg of allLegs) {
+      const originCountry = leg?.AirlineDeparture?.countryCode || leg?.AirlineDeparture?.CountryCode;
+      const destCountry = leg?.AirlineArrival?.countryCode || leg?.AirlineArrival?.CountryCode;
+
+      if (originCountry) {
+        hasKnownCountryCodes = true;
+        if (!directCountryCodeArr.includes(String(originCountry).toUpperCase())) {
+          return 1; // International!
+        }
+      }
+      if (destCountry) {
+        hasKnownCountryCodes = true;
+        if (!directCountryCodeArr.includes(String(destCountry).toUpperCase())) {
+          return 1; // International!
+        }
+      }
+    }
+
+    if (hasKnownCountryCodes && allLegs.length > 0) {
+      // All known country codes were India
+      return 0;
+    }
+
+    // Extract all airport codes across all legs and flights
+    const airportCodes = new Set();
+    allLegs.forEach((leg) => {
+      const dep = leg?.AirlineDeparture?.code || leg?.DepartureAirportCode || leg?.Origin;
+      const arr = leg?.AirlineArrival?.code || leg?.ArrivalAirportCode || leg?.Destination;
+      if (dep) airportCodes.add(String(dep).trim().toUpperCase());
+      if (arr) airportCodes.add(String(arr).trim().toUpperCase());
+    });
+
+    const flight = bookingData?.isRoundTrip ? (bookingData?.outboundFlight || bookingData?.flight) : bookingData?.flight;
+    if (flight?.DepartureAirportCode) airportCodes.add(String(flight.DepartureAirportCode).trim().toUpperCase());
+    if (flight?.ArrivalAirportCode) airportCodes.add(String(flight.ArrivalAirportCode).trim().toUpperCase());
+    if (flight?.Origin) airportCodes.add(String(flight.Origin).trim().toUpperCase());
+    if (flight?.Destination) airportCodes.add(String(flight.Destination).trim().toUpperCase());
+    if (bookingData?.origin) airportCodes.add(String(bookingData.origin).trim().toUpperCase());
+    if (bookingData?.destination) airportCodes.add(String(bookingData.destination).trim().toUpperCase());
+
+    const codeList = Array.from(airportCodes).filter(Boolean);
+    if (codeList.length > 0) {
+      const results = await Promise.all(
+        codeList.map((code) =>
+          api.post(`/Flight/ListAirportsByCode?airportCode=${code}`, {}).catch(() => null)
+        )
+      );
+
+      for (const res of results) {
+        const countryCode = res?.data?.Data?.[0]?.CountryCode;
+        if (countryCode && !directCountryCodeArr.includes(String(countryCode).toUpperCase())) {
+          return 1; // International!
+        }
+      }
+      // If we got responses for all and they are all India, return 0
+      if (results.some((r) => r?.data?.Data?.[0]?.CountryCode)) {
         return 0;
       }
     }
@@ -79,12 +183,43 @@ const parseSegDateTime = (dtStr) => {
 export default function ReviewDetails() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const { isLoggedIn, user, isB2B: authIsB2B } = useAuth();
+  const rawUserType = (user?.UserType || user?.userType || user?.Role || user?.role || "").toLowerCase();
+  const isB2C = rawUserType === "b2c";
+  const isB2B = (authIsB2B || rawUserType === "b2b") && !isB2C;
+
+  const [useGst, setUseGst] = useState(false);
+  const [gstDetails, setGstDetails] = useState({
+    gstNumber: "",
+    email: "",
+    registeredName: "",
+    mobile: "",
+    address: "",
+  });
+
+  const [contactDetails, setContactDetails] = useState({
+    mobile: "",
+    email: "",
+  });
+
+  // useEffect(() => {
+  //   if (user) {
+  //     setContactDetails((prev) => ({
+  //       mobile: prev.mobile || user.Mobile || user.mobile || "",
+  //       email: prev.email || user.Email || user.email || "",
+  //     }));
+  //   }
+  // }, [user]);
+
+  const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
 
   const [isFareModalOpen, setIsFareModalOpen] = useState(false);
   const [isFlightSeatMap, setIsFlightSeatMap] = useState(false);
+  const [targetSeatSegmentIndex, setTargetSeatSegmentIndex] = useState(0);
   const [selectedSeatCost, setSelectedSeatCost] = useState(0);
   const [selectedSeatData, setSelectedSeatData] = useState(null); // { seats: Set, services: [] }
   const [selectedSeatDetails, setSelectedSeatDetails] = useState([]); // ordered array of seat objects
+  const [isSeatSectionOpen, setIsSeatSectionOpen] = useState(true);
 
   const [isTripBenefitsModal, setIsTripBenefitsModal] = useState(false);
   const [isTicketDetailsReviewModal, setIsTicketDetailsReviewModal] =
@@ -94,10 +229,16 @@ export default function ReviewDetails() {
   const [baggageTarget, setBaggageTarget] = useState(null);
   const [isMealModal, setIsMealModal] = useState(false);
   const [mealTarget, setMealTarget] = useState(null);
-  const [isInternational, setIsInternational] = useState(() => {
-    return bookingStore.get()?.travelType === 1;
-  });
+  const [isInternational, setIsInternational] = useState(() => Number(bookingStore.get()?.travelType) === 1);
   const [showValidationErrors, setShowValidationErrors] = useState(false);
+  const [isDisclaimerModalOpen, setIsDisclaimerModalOpen] = useState(false);
+  const [isFareAlertModalOpen, setIsFareAlertModalOpen] = useState(false);
+  const [hasUserAcceptedFareAlert, setHasUserAcceptedFareAlert] = useState(false);
+  const hasShownInitialFareAlertRef = React.useRef(false);
+
+  useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+  }, []);
 
   const currentBooking = bookingStore.get();
   const currentFlightKey = currentBooking.isRoundTrip
@@ -131,13 +272,13 @@ export default function ReviewDetails() {
         if (outKey) reviewKeyList.push(outKey);
         if (retKey) reviewKeyList.push(retKey);
 
-        // OldPrice = sum of both flights' TotalFare
+        // OldPrice = sum of both flights' AirlineMinPrice
         oldPrice =
-          (bookingData.outboundFlight?.AirlineMinNetPrice ||
-            bookingData.outboundFlight?.AirlineMinPrice ||
+          (Number(bookingData.outboundFlight?.AirlineMinPrice) ||
+            Number(bookingData.outboundFlight?.AirlineMinNetPrice) ||
             0) +
-          (bookingData.returnFlight?.AirlineMinNetPrice ||
-            bookingData.returnFlight?.AirlineMinPrice ||
+          (Number(bookingData.returnFlight?.AirlineMinPrice) ||
+            Number(bookingData.returnFlight?.AirlineMinNetPrice) ||
             0);
       } else {
         const key =
@@ -148,9 +289,9 @@ export default function ReviewDetails() {
         if (key) reviewKeyList.push(key);
 
         oldPrice =
-          bookingData.selectedFare?.PriceList?.TotalFare ||
-          bookingData.flight?.AirlineMinNetPrice ||
-          bookingData.flight?.AirlineMinPrice ||
+          Number(bookingData.flight?.AirlineMinPrice) ||
+          Number(bookingData.selectedFare?.PriceList?.TotalFare) ||
+          Number(bookingData.flight?.AirlineMinNetPrice) ||
           0;
       }
 
@@ -160,7 +301,15 @@ export default function ReviewDetails() {
 
       // TravelType determination
       const travelType = await getTravelType(bookingData);
-      bookingStore.set({ travelType });
+      bookingStore.set({
+        travelType,
+        // Clear any stale seat and GST selections from a previous booking session
+        selectedSeatDetails: [],
+        selectedSeats: [],
+        selectedServices: [],
+        seatTotal: 0,
+        gstInfo: null,
+      });
       setIsInternational(travelType === 1);
 
       const payload = {
@@ -181,7 +330,9 @@ export default function ReviewDetails() {
         // Extract the API's own ErrorMessage from the error response body
         const apiMsg =
           axiosErr?.response?.data?.ErrorMessage ||
+          axiosErr?.response?.data?.errorMessage ||
           axiosErr?.response?.data?.message ||
+          axiosErr?.response?.data?.Message ||
           axiosErr?.message ||
           "Failed to load fare details.";
         throw new Error(apiMsg);
@@ -189,7 +340,11 @@ export default function ReviewDetails() {
 
       if (!res.data?.IsSuccess) {
         throw new Error(
-          res.data?.ErrorMessage || "Failed to load fare details.",
+          res.data?.ErrorMessage ||
+          res.data?.errorMessage ||
+          res.data?.message ||
+          res.data?.Message ||
+          "Failed to load fare details.",
         );
       }
 
@@ -198,6 +353,83 @@ export default function ReviewDetails() {
   });
 
   const isMultipleFlights = fareReviewData?.TripInfo?.[0]?.FlightDetailResponses?.length > 1;
+
+  const isSeatAllowed = Boolean(
+    fareReviewData?.Conditions?.isa === true ||
+    fareReviewData?.conditions?.isa === true ||
+    fareReviewData?.Conditions?.Isa === true ||
+    fareReviewData?.Data?.Conditions?.isa === true ||
+    fareReviewData?.Data?.Conditions?.Isa === true
+  );
+
+  const gstConditions =
+    fareReviewData?.Conditions?.gst ||
+    fareReviewData?.conditions?.gst ||
+    fareReviewData?.Data?.Conditions?.gst ||
+    fareReviewData?.TripInfo?.[0]?.Conditions?.gst;
+
+  const isGstApplicable = Boolean(gstConditions?.gstappl);
+  const isGstMandatory = Boolean(gstConditions?.igm);
+
+  const pcsConditions =
+    fareReviewData?.Conditions?.pcs ??
+    fareReviewData?.conditions?.pcs ??
+    fareReviewData?.Data?.Conditions?.pcs ??
+    fareReviewData?.TripInfo?.[0]?.Conditions?.pcs ??
+    null;
+
+  const hasPcs = Boolean(pcsConditions && typeof pcsConditions === "object");
+
+  const dobConditions =
+    fareReviewData?.Conditions?.dob ||
+    fareReviewData?.conditions?.dob ||
+    fareReviewData?.Data?.Conditions?.dob ||
+    fareReviewData?.TripInfo?.[0]?.Conditions?.dob;
+
+  // Conditions.dob / pcs.dobe flags:
+  // If pcs is not null, then DOB is required for ALL passenger types (Adult, Child, Infant) according to pcs.dobe (dobe === true).
+  // If pcs is null/undefined, maintain current behavior.
+  const isPcsDobeRequired = hasPcs ? Boolean(pcsConditions.dobe ?? pcsConditions.Dobe ?? false) : false;
+
+  const isAdultDobRequired = hasPcs
+    ? isPcsDobeRequired
+    : (dobConditions
+      ? Boolean(dobConditions.adobr ?? dobConditions.Adobr ?? false)
+      : Boolean(isInternational));
+
+  const isChildDobRequired = hasPcs
+    ? isPcsDobeRequired
+    : (dobConditions
+      ? Boolean(dobConditions.cdobr ?? dobConditions.Cdobr ?? false)
+      : true);
+
+  const isInfantDobRequired = hasPcs
+    ? isPcsDobeRequired
+    : (dobConditions
+      ? Boolean(dobConditions.idobr ?? dobConditions.Idobr ?? true)
+      : true);
+
+  const fareAlert = useMemo(() => {
+    const rawAlerts = fareReviewData?.Alerts || fareReviewData?.Data?.Alerts;
+    if (!rawAlerts) return null;
+    let targetAlert = null;
+    if (Array.isArray(rawAlerts)) {
+      targetAlert = rawAlerts.find((a) => a?.AlertType === "FAREALERT" || (a?.NewFare && a?.OldFare)) || rawAlerts[0] || null;
+    } else if (typeof rawAlerts === "object" && (rawAlerts.AlertType === "FAREALERT" || (rawAlerts.NewFare && rawAlerts.OldFare))) {
+      targetAlert = rawAlerts;
+    }
+    if (targetAlert && Number(targetAlert.OldFare) !== Number(targetAlert.NewFare)) {
+      return targetAlert;
+    }
+    return null;
+  }, [fareReviewData]);
+
+  useEffect(() => {
+    if (fareAlert && !hasShownInitialFareAlertRef.current && !hasUserAcceptedFareAlert) {
+      hasShownInitialFareAlertRef.current = true;
+      setIsFareAlertModalOpen(true);
+    }
+  }, [fareAlert, hasUserAcceptedFareAlert]);
 
   const fareRuleData = fareReviewData?.TripInfo?.[0]?.FareRules?.fareRule ?? [];
   const TripBaggageData = fareReviewData?.TripInfo?.[0]?.TripBaggageList ?? [];
@@ -210,6 +442,16 @@ export default function ReviewDetails() {
   const flight = FlightsDepartureAndArrivalDetails?.[0];
 
   const handleScroll = (id) => {
+    if (id === "seats-section" || id === "seats" || id === "seats-meals") {
+      setIsSeatSectionOpen(true);
+      setTimeout(() => {
+        const section = document.getElementById("seats-section");
+        if (section) {
+          section.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
+      }, 50);
+      return;
+    }
     const section = document.getElementById(id);
     if (section) {
       section.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -223,79 +465,325 @@ export default function ReviewDetails() {
     handleScroll(id);
   };
 
-  const updateTraveller = (category, index, field, value) => {
-    const updated = { ...travellers };
-    updated[category][index][field] = value;
-    setTravellers(updated);
-  };
-
-  const addTraveller = (category, limit) => {
-    if (travellers[category].length < limit) {
-      setTravellers({
-        ...travellers,
-        [category]: [
-          ...travellers[category],
-          category === "Adults"
-            ? makeAdult(Date.now())
-            : category === "Childs"
-              ? makeChild(Date.now())
-              : makeInfant(Date.now()),
-        ],
-      });
-    }
-  };
-
-  const removeTraveller = (category, index) => {
-    const traveller = travellers[category][index];
-    const hasData = Object.values(traveller).some((v) => v);
-    if (
-      hasData &&
-      !window.confirm(
-        `Remove this ${category.slice(0, -1)}? All entered data will be lost.`,
-      )
-    )
-      return;
-
-    setTravellers({
-      ...travellers,
-      [category]: travellers[category].filter((_, i) => i !== index),
-    });
-  };
   // Derive fare numbers from API response (fall back to 0 while loading)
   const totalPriceList = fareReviewData?.TotalPriceList?.fC;
   const afC = fareReviewData?.TotalPriceList?.afC;
 
-  // Base Fare (BF)
-  const baseFare = totalPriceList?.BF ?? 0;
+  // Markups & Transaction Fee from fareReviewData
+  const retailerMarkup = Number(fareReviewData?.RetailerMarkup ?? fareReviewData?.TripInfo?.[0]?.RetailerMarkup ?? 0);
+  const skyvooMarkup = Number(fareReviewData?.SkyvooMarkup ?? fareReviewData?.TripInfo?.[0]?.SkyvooMarkup ?? 0);
+  const totalMarkup = retailerMarkup + skyvooMarkup || Number(fareReviewData?.Markup ?? fareReviewData?.TripInfo?.[0]?.Markup ?? 0);
+  const transactionFee = Number(fareReviewData?.TransactionFee ?? 0);
+  const services = transactionFee;
 
-  // Total taxes & fees (TAF = YQ + AGST + OT + MF + MFT)
-  const taxes = totalPriceList?.TAF ?? 0;
+  // Base Fare (BF) with Skyvoo Markup added (Math.ceil)
+  const rawBaseFare = Number(totalPriceList?.BF ?? 0);
+  const totalFare = Number(totalPriceList?.TF ?? 0);
+  const baseFare = Math.ceil(rawBaseFare + Math.ceil(skyvooMarkup));
+
+  // Total taxes & fees (TAF) with Retailer Markup + Transaction Fee added (Math.ceil)
+  const rawTaxes = Number(totalPriceList?.TAF ?? 0);
+  const taxes = Math.ceil(rawTaxes + Math.ceil(retailerMarkup) + transactionFee);
+
+  // Total amount to be paid before markups
+  const totalAmountToBePay = rawBaseFare + rawTaxes;
+
+
 
   // Tax breakdown from afC.TAF
-  const fuelSurcharge = afC?.TAF?.YQ ?? 0;
-  const gst           = afC?.TAF?.AGST ?? 0;
-  const otherTaxes    = afC?.TAF?.OT ?? 0;
-  // MF (Management Fee) if present
-  const managementFee = afC?.TAF?.MF ?? 0;
+  const fuelSurcharge = Number(afC?.TAF?.YQ ?? 0);
+  const gst = Number(afC?.TAF?.AGST ?? 0);
+  const otherTaxes = Number(afC?.TAF?.OT ?? 0);
+  const managementFee = Number(afC?.TAF?.MF ?? 0);
+  const managementFeeTax = Number(afC?.TAF?.MFT ?? 0);
+  const carrierMiscFee = Number(afC?.TAF?.YR ?? 0);
 
-  const services = fareReviewData?.TransactionFee ?? 0;
+  // Multi-trip / Round-trip breakdown for Onward & Return
+  const isRoundTripReview = (fareReviewData?.TripInfo?.length ?? 0) > 1;
+  const onwardTrip = fareReviewData?.TripInfo?.[0];
+  const returnTrip = isRoundTripReview ? fareReviewData?.TripInfo?.[1] : null;
+
+  // Helper to extract breakdown from a trip object
+  const getTripBreakdown = (trip) => {
+    if (!trip) return null;
+    const totalFareDetail = trip.TotalFareDetail || trip.totalFareDetail || trip.TotalPriceInfo?.TotalFareDetail;
+    const tpl = trip.TotalPriceList || trip.totalPriceList;
+    const tplItem = Array.isArray(tpl) ? tpl[0] : tpl;
+    const fd = tplItem?.fd || trip.fd;
+    const adultFd = fd?.ADULT || fd?.Adult || fd;
+    const fC = totalFareDetail?.fC || trip.fC || adultFd?.fC || tplItem?.fC || trip.TotalPriceInfo?.fC;
+    const afCData = totalFareDetail?.afC || trip.afC || adultFd?.afC || tplItem?.afC || trip.TotalPriceInfo?.afC;
+
+    const rawBf = Number(fC?.BF || fC?.bf || 0);
+    const rawTaf = Number(fC?.TAF || fC?.taf || 0);
+
+    const tafAfC = afCData?.TAF || afCData?.taf || {};
+    const gstVal = Number(tafAfC?.AGST || tafAfC?.agst || 0);
+    const mfVal = Number(tafAfC?.MF || tafAfC?.mf || 0);
+    const mftVal = Number(tafAfC?.MFT || tafAfC?.mft || 0);
+    const otVal = Number(tafAfC?.OT || tafAfC?.ot || 0);
+    const yqVal = Number(tafAfC?.YQ || tafAfC?.yq || 0);
+    const yrVal = Number(tafAfC?.YR || tafAfC?.yr || 0);
+
+    const rMarkup = Number(trip.RetailerMarkup || trip.retailerMarkup || trip.CspMarkup || trip.cspMarkup || 0);
+    const sMarkup = Number(trip.SkyvooMarkup || trip.skyvooMarkup || trip.RoinetMarkup || trip.roinetMarkup || 0);
+    const tFee = Number(trip.TransactionFee || trip.transactionFee || trip.TxnFees || trip.txnFees || 0);
+
+    return {
+      rawBf,
+      rawTaf,
+      gstVal,
+      mfVal,
+      mftVal,
+      otVal,
+      yqVal,
+      yrVal,
+      rMarkup,
+      sMarkup,
+      tFee,
+    };
+  };
+
+  const onwardData = getTripBreakdown(onwardTrip);
+  const returnData = getTripBreakdown(returnTrip);
+
+  // If trips have individual prices, use them; otherwise split total 50/50
+  const hasTripSplit = isRoundTripReview && (
+    (Number(onwardData?.rawBf) > 0 || Number(returnData?.rawBf) > 0) ||
+    (Number(onwardData?.rawTaf) > 0 || Number(returnData?.rawTaf) > 0)
+  );
+
+  const onwardBaseFare = hasTripSplit ? (onwardData?.rawBf || 0) : (isRoundTripReview ? Math.floor(rawBaseFare / 2) : rawBaseFare);
+  const returnBaseFare = hasTripSplit ? (returnData?.rawBf || 0) : (isRoundTripReview ? (rawBaseFare - Math.floor(rawBaseFare / 2)) : 0);
+
+  const onwardRoinetMarkup = (Number(onwardData?.sMarkup) > 0 || Number(returnData?.sMarkup) > 0)
+    ? (onwardData?.sMarkup || 0)
+    : (isRoundTripReview ? Math.floor(skyvooMarkup / 2) : skyvooMarkup);
+  const returnRoinetMarkup = (Number(onwardData?.sMarkup) > 0 || Number(returnData?.sMarkup) > 0)
+    ? (returnData?.sMarkup || 0)
+    : (isRoundTripReview ? (skyvooMarkup - Math.floor(skyvooMarkup / 2)) : 0);
+
+  const onwardCspMarkup = (Number(onwardData?.rMarkup) > 0 || Number(returnData?.rMarkup) > 0)
+    ? (onwardData?.rMarkup || 0)
+    : (isRoundTripReview ? Math.floor(retailerMarkup / 2) : retailerMarkup);
+  const returnCspMarkup = (Number(onwardData?.rMarkup) > 0 || Number(returnData?.rMarkup) > 0)
+    ? (returnData?.rMarkup || 0)
+    : (isRoundTripReview ? (retailerMarkup - Math.floor(retailerMarkup / 2)) : 0);
+
+  const onwardTxnFees = (Number(onwardData?.tFee) > 0 || Number(returnData?.tFee) > 0)
+    ? (onwardData?.tFee || 0)
+    : (isRoundTripReview ? Math.floor(transactionFee / 2) : transactionFee);
+  const returnTxnFees = (Number(onwardData?.tFee) > 0 || Number(returnData?.tFee) > 0)
+    ? (returnData?.tFee || 0)
+    : (isRoundTripReview ? (transactionFee - Math.floor(transactionFee / 2)) : 0);
+
+  const onwardTaxesAndFee = hasTripSplit ? (onwardData?.rawTaf || 0) : (isRoundTripReview ? Math.floor(rawTaxes / 2) : rawTaxes);
+  const returnTaxesAndFee = hasTripSplit ? (returnData?.rawTaf || 0) : (isRoundTripReview ? (rawTaxes - Math.floor(rawTaxes / 2)) : 0);
+
+  const onwardAirlineGst = (Number(onwardData?.gstVal) > 0 || Number(returnData?.gstVal) > 0) ? (onwardData?.gstVal || 0) : (isRoundTripReview ? Math.floor(gst / 2) : gst);
+  const returnAirlineGst = (Number(onwardData?.gstVal) > 0 || Number(returnData?.gstVal) > 0) ? (returnData?.gstVal || 0) : (isRoundTripReview ? (gst - Math.floor(gst / 2)) : 0);
+
+  const onwardManagementFee = (Number(onwardData?.mfVal) > 0 || Number(returnData?.mfVal) > 0) ? (onwardData?.mfVal || 0) : (isRoundTripReview ? Math.floor(managementFee / 2) : managementFee);
+  const returnManagementFee = (Number(onwardData?.mfVal) > 0 || Number(returnData?.mfVal) > 0) ? (returnData?.mfVal || 0) : (isRoundTripReview ? (managementFee - Math.floor(managementFee / 2)) : 0);
+
+  const onwardManagementFeeTax = (Number(onwardData?.mftVal) > 0 || Number(returnData?.mftVal) > 0) ? (onwardData?.mftVal || 0) : (isRoundTripReview ? Math.floor(managementFeeTax / 2) : managementFeeTax);
+  const returnManagementFeeTax = (Number(onwardData?.mftVal) > 0 || Number(returnData?.mftVal) > 0) ? (returnData?.mftVal || 0) : (isRoundTripReview ? (managementFeeTax - Math.floor(managementFeeTax / 2)) : 0);
+
+  const onwardOtherTaxes = (Number(onwardData?.otVal) > 0 || Number(returnData?.otVal) > 0) ? (onwardData?.otVal || 0) : (isRoundTripReview ? Math.floor(otherTaxes / 2) : otherTaxes);
+  const returnOtherTaxes = (Number(onwardData?.otVal) > 0 || Number(returnData?.otVal) > 0) ? (returnData?.otVal || 0) : (isRoundTripReview ? (otherTaxes - Math.floor(otherTaxes / 2)) : 0);
+
+  const onwardYQ = (Number(onwardData?.yqVal) > 0 || Number(returnData?.yqVal) > 0) ? (onwardData?.yqVal || 0) : (isRoundTripReview ? Math.floor(fuelSurcharge / 2) : fuelSurcharge);
+  const returnYQ = (Number(onwardData?.yqVal) > 0 || Number(returnData?.yqVal) > 0) ? (returnData?.yqVal || 0) : (isRoundTripReview ? (fuelSurcharge - Math.floor(fuelSurcharge / 2)) : 0);
+
+  const onwardYR = (Number(onwardData?.yrVal) > 0 || Number(returnData?.yrVal) > 0) ? (onwardData?.yrVal || 0) : (isRoundTripReview ? Math.floor(carrierMiscFee / 2) : carrierMiscFee);
+  const returnYR = (Number(onwardData?.yrVal) > 0 || Number(returnData?.yrVal) > 0) ? (returnData?.yrVal || 0) : (isRoundTripReview ? (carrierMiscFee - Math.floor(carrierMiscFee / 2)) : 0);
 
   const [selectedCoupon, setSelectedCoupon] = useState(null);
 
-  const isIntl =
-    isInternational ||
-    fareReviewData?.TravelType === 1 ||
-    fareReviewData?.TripInfo?.[0]?.TravelType === 1 ||
-    bookingStore.get()?.travelType === 1;
+  const isIntl = useMemo(() => {
+    if (isInternational || Number(bookingStore.get()?.travelType) === 1) {
+      return true;
+    }
 
-  // Derive traveller limits from API
-  const TotalTravellers = {
-    Adults: fareReviewData?.PaxInfo?.ADULT?.Count ?? 1,
-    Childs: fareReviewData?.PaxInfo?.CHILD?.Count ?? 0,
-    Infants: fareReviewData?.PaxInfo?.INFANT?.Count ?? 0,
-  };
+    const ind = ["IND", "IN"];
+    const allLegs = (fareReviewData?.TripInfo || []).flatMap((t) => t?.FlightDetailResponses || []);
+
+    for (const leg of allLegs) {
+      const depC = leg?.AirlineDeparture?.countryCode || leg?.AirlineDeparture?.CountryCode;
+      const arrC = leg?.AirlineArrival?.countryCode || leg?.AirlineArrival?.CountryCode;
+
+      if (depC && !ind.includes(String(depC).toUpperCase())) return true;
+      if (arrC && !ind.includes(String(arrC).toUpperCase())) return true;
+    }
+
+    return false;
+  }, [isInternational, fareReviewData]);
+
+  // Passport conditions based on Conditions.pcs:
+  // If pcs is NOT null:
+  // - pm: true -> passport details required; pm: false -> optional
+  // - pped: true -> passport expiry date required / shown
+  // - pid: true -> passport issued date required / shown
+  // If pcs is null/undefined: maintain current behavior (based on isIntl)
+  const isPassportRequired = hasPcs
+    ? Boolean(pcsConditions.pm ?? pcsConditions.Pm ?? false)
+    : isIntl;
+
+  const showPassportIssueDate = hasPcs
+    ? Boolean(pcsConditions.pid ?? pcsConditions.Pid ?? false)
+    : isIntl;
+
+  const showPassportExpiryDate = hasPcs
+    ? Boolean(pcsConditions.pped ?? pcsConditions.Pped ?? false)
+    : isIntl;
+
+  const isPassportSectionVisible = hasPcs ? true : isIntl;
+
+  // Derive traveller limits from API / filter / bookingStore
+  const TotalTravellers = useMemo(() => {
+    const bookingData = bookingStore.get();
+
+    const getVal = (val, searchKey, storeKey, defaultVal = 0) => {
+      if (val !== undefined && val !== null) {
+        if (typeof val === "number" && !isNaN(val)) return val;
+        if (typeof val === "object" && val.Count !== undefined && !isNaN(Number(val.Count))) return Number(val.Count);
+        if (!isNaN(Number(val))) return Number(val);
+      }
+      if (bookingData?.travellers?.[storeKey] !== undefined && !isNaN(Number(bookingData.travellers[storeKey]))) {
+        return Number(bookingData.travellers[storeKey]);
+      }
+      const spVal = searchParams.get(searchKey);
+      if (spVal !== null && !isNaN(Number(spVal))) {
+        return Number(spVal);
+      }
+      return defaultVal;
+    };
+
+    const adultCount = Math.max(1, getVal(fareReviewData?.PaxInfo?.ADULT, "adults", "adults", 1));
+    const childCount = Math.max(0, getVal(fareReviewData?.PaxInfo?.CHILD, "children", "children", 0));
+    const infantCount = Math.max(0, getVal(fareReviewData?.PaxInfo?.INFANT, "infants", "infants", 0));
+
+    return {
+      Adults: adultCount,
+      Childs: childCount,
+      Infants: infantCount,
+    };
+  }, [fareReviewData, searchParams]);
 
   const { Adults, Childs, Infants } = TotalTravellers;
+
+  // Reference travel date for age calculations
+  const travelDate = useMemo(() => {
+    const bookingData = bookingStore.get();
+    const firstLeg =
+      fareReviewData?.TripInfo?.[0]?.FlightDetailResponses?.[0] ||
+      bookingData?.flight?.FlightDetailResponses?.[0] ||
+      bookingData?.outboundFlight?.FlightDetailResponses?.[0];
+    const depDateStr = firstLeg?.DepartureDate || bookingData?.depart;
+    if (depDateStr) {
+      const d = dayjs(depDateStr);
+      if (d.isValid()) return d.startOf("day");
+    }
+    return dayjs().startOf("day");
+  }, [fareReviewData]);
+
+  const disabledAdultDate = (current) => {
+    if (!current) return false;
+    const maxDate = travelDate.subtract(12, "year");
+    return current.isAfter(maxDate, "day");
+  };
+
+  const disabledChildDate = (current) => {
+    if (!current) return false;
+    const minDate = travelDate.subtract(12, "year");
+    const maxDate = travelDate.subtract(2, "year");
+    return current.isBefore(minDate, "day") || current.isAfter(maxDate, "day");
+  };
+
+  const disabledInfantDate = (current) => {
+    if (!current) return false;
+    const minDate = travelDate.subtract(2, "year");
+    const maxDate = travelDate.isBefore(dayjs(), "day") ? travelDate : dayjs();
+    return current.isBefore(minDate, "day") || current.isAfter(maxDate, "day");
+  };
+
+  const getAdultDobError = (dob) => {
+    if (!dob) {
+      return isAdultDobRequired ? "Date of Birth is required" : null;
+    }
+    if (dob === "INVALID") return "Please enter a valid Date of Birth (DD/MM/YYYY)";
+    const d = dayjs(dob, "YYYY-MM-DD");
+    if (!d.isValid()) return "Please enter a valid Date of Birth";
+    const ageInYears = travelDate.diff(d, "year", true);
+    if (ageInYears < 12) {
+      return "Adult must be 12 years or older on date of travel";
+    }
+    return null;
+  };
+
+  const getChildDobError = (dob) => {
+    if (!dob) {
+      return isChildDobRequired ? "Date of Birth is required" : null;
+    }
+    if (dob === "INVALID") return "Please enter a valid Date of Birth (DD/MM/YYYY)";
+    const d = dayjs(dob, "YYYY-MM-DD");
+    if (!d.isValid()) return "Please enter a valid Date of Birth";
+    const ageInYears = travelDate.diff(d, "year", true);
+    if (ageInYears < 2) {
+      return "Child must be at least 2 years on date of travel";
+    }
+    if (ageInYears > 12) {
+      return "Child must be 12 years or younger on date of travel";
+    }
+    return null;
+  };
+
+  const getInfantDobError = (dob) => {
+    if (!dob) {
+      return isInfantDobRequired ? "Date of Birth is required" : null;
+    }
+    if (dob === "INVALID") return "Please enter a valid Date of Birth (DD/MM/YYYY)";
+    const d = dayjs(dob, "YYYY-MM-DD");
+    if (!d.isValid()) return "Please enter a valid Date of Birth";
+    if (d.isAfter(dayjs(), "day") || d.isAfter(travelDate, "day")) {
+      return "Date of Birth cannot be in the future";
+    }
+    const ageInYears = travelDate.diff(d, "year", true);
+    if (ageInYears >= 2) {
+      return "Infant must be below 2 years on date of travel";
+    }
+    if (ageInYears < 0) {
+      return "Date of Birth cannot be after travel date";
+    }
+    return null;
+  };
+
+  const getTravellerPassportError = (t) => {
+    if (!isPassportSectionVisible) return null;
+    const hasAnyField = Boolean(
+      t.passportNumber?.trim() ||
+      t.passportNationality?.trim() ||
+      t.passportIssued ||
+      t.passportExpiry
+    );
+
+    // If passport is mandatory, OR if optional but traveller started filling details:
+    if (isPassportRequired || hasAnyField) {
+      if (!t.passportNumber?.trim()) {
+        return "Passport Number is required";
+      }
+      if (!t.passportNationality?.trim()) {
+        return "Nationality is required";
+      }
+      if (showPassportIssueDate && !t.passportIssued) {
+        return "Passport Issue Date is required";
+      }
+      if (showPassportExpiryDate && !t.passportExpiry) {
+        return "Passport Expiry Date is required";
+      }
+    }
+    return null;
+  };
 
   const makeAdult = (id) => ({
     id,
@@ -320,6 +808,10 @@ export default function ReviewDetails() {
     lastName: "",
     gender: "MALE",
     dob: "",
+    passportNumber: "",
+    passportNationality: "",
+    passportExpiry: "",
+    passportIssued: "",
     selectedBaggage: [],
     selectedMeals: [],
   });
@@ -330,15 +822,113 @@ export default function ReviewDetails() {
     gender: "MALE",
     dob: "",
     accompanyingAdult: "",
+    passportNumber: "",
+    passportNationality: "",
+    passportExpiry: "",
+    passportIssued: "",
     selectedBaggage: [],
     selectedMeals: [],
   });
 
-  const [travellers, setTravellers] = useState({
-    Adults: [],
-    Childs: [],
-    Infants: [],
+  const [travellers, setTravellers] = useState(() => {
+    const bookingData = bookingStore.get();
+    const aCount = Math.max(1, Number(bookingData?.travellers?.adults ?? searchParams.get("adults") ?? 1));
+    const cCount = Math.max(0, Number(bookingData?.travellers?.children ?? searchParams.get("children") ?? 0));
+    const iCount = Math.max(0, Number(bookingData?.travellers?.infants ?? searchParams.get("infants") ?? 0));
+
+    return {
+      Adults: Array.from({ length: aCount }, (_, i) => makeAdult(Date.now() + i)),
+      Childs: Array.from({ length: cCount }, (_, i) => makeChild(Date.now() + 100 + i)),
+      Infants: Array.from({ length: iCount }, (_, i) => makeInfant(Date.now() + 200 + i)),
+    };
   });
+
+  useEffect(() => {
+    setTravellers((prev) => {
+      const curAdults = prev.Adults || [];
+      const curChilds = prev.Childs || [];
+      const curInfants = prev.Infants || [];
+
+      let newAdults = [...curAdults];
+      if (Adults > newAdults.length) {
+        for (let i = newAdults.length; i < Adults; i++) {
+          newAdults.push(makeAdult(Date.now() + i));
+        }
+      } else if (Adults < newAdults.length && Adults > 0) {
+        newAdults = newAdults.slice(0, Adults);
+      }
+
+      let newChilds = [...curChilds];
+      if (Childs > newChilds.length) {
+        for (let i = newChilds.length; i < Childs; i++) {
+          newChilds.push(makeChild(Date.now() + 100 + i));
+        }
+      } else if (Childs < newChilds.length) {
+        newChilds = newChilds.slice(0, Childs);
+      }
+
+      let newInfants = [...curInfants];
+      if (Infants > newInfants.length) {
+        for (let i = newInfants.length; i < Infants; i++) {
+          newInfants.push(makeInfant(Date.now() + 200 + i));
+        }
+      } else if (Infants < newInfants.length) {
+        newInfants = newInfants.slice(0, Infants);
+      }
+
+      if (
+        newAdults.length === curAdults.length &&
+        newChilds.length === curChilds.length &&
+        newInfants.length === curInfants.length
+      ) {
+        return prev;
+      }
+
+      return {
+        Adults: newAdults.length > 0 ? newAdults : [makeAdult(1)],
+        Childs: newChilds,
+        Infants: newInfants,
+      };
+    });
+  }, [Adults, Childs, Infants]);
+
+  const updateTraveller = (category, index, field, value) => {
+    setTravellers((prev) => {
+      const updatedCat = [...(prev[category] || [])];
+      if (updatedCat[index]) {
+        updatedCat[index] = { ...updatedCat[index], [field]: value };
+      }
+      return { ...prev, [category]: updatedCat };
+    });
+  };
+
+  const addTraveller = (category, limit) => {
+    setTravellers((prev) => {
+      const list = prev[category] || [];
+      if (list.length >= limit) return prev;
+      const maker = category === "Adults" ? makeAdult : category === "Childs" ? makeChild : makeInfant;
+      return {
+        ...prev,
+        [category]: [...list, maker(Date.now() + list.length)],
+      };
+    });
+  };
+
+  const removeTraveller = (category, index) => {
+    setTravellers((prev) => {
+      const updated = (prev[category] || []).filter((_, i) => i !== index);
+      return { ...prev, [category]: updated };
+    });
+  };
+
+  // Sanitizes name input: allows ONLY letters and single spaces, no leading space, no integers, no special characters
+  const handleNameChange = (category, index, field, rawValue) => {
+    const sanitized = String(rawValue || "")
+      .replace(/[^a-zA-Z\s]/g, "") // Remove integers and special characters
+      .replace(/^\s+/, "") // Remove leading space
+      .replace(/\s{2,}/g, " "); // Collapse multiple spaces
+    updateTraveller(category, index, field, sanitized);
+  };
 
   // Compute total baggage price & count across all travellers
   const totalBaggageCost = useMemo(() => {
@@ -384,22 +974,28 @@ export default function ReviewDetails() {
     return all.reduce((sum, t) => sum + (t.selectedMeals?.length || 0), 0);
   }, [travellers]);
 
-  // subTotal = BF + TAF + extras (baggage, meals, seat)
-  const subTotal = baseFare + taxes + totalBaggageCost + totalMealCost + selectedSeatCost;
+  // Total Meal, Baggage & Seat Add-ons
+  const totalBaggageMealSeatAmount = totalBaggageCost + totalMealCost + selectedSeatCost;
+
+  // subTotal = Base Fare + Taxes & Fees (includes markups & txn fees)
+  const subTotal = baseFare + taxes;
 
   // subtotal alias (used by calculateTotal)
-  const subtotal = baseFare + taxes;
+  const subtotal = subTotal;
 
-  const convenienceFee = fareReviewData?.ConvenienceFee ?? 0;
+  // Amount to pay = totalAmountToBePay + cspMarkup + roinetMarkup + txnFees + add-ons
+  const amountToPay = Math.ceil(totalAmountToBePay + retailerMarkup + Math.ceil(skyvooMarkup) + transactionFee + totalBaggageMealSeatAmount);
 
-  const amountToPay = subTotal + convenienceFee;
+  // Convenience fee = cspMarkup (retailerMarkup)
+  const convenienceFee = Math.ceil(retailerMarkup);
 
-  const commission = fareReviewData?.Commission ?? 0;
+  const commission = Number(fareReviewData?.Commission ?? 0);
 
-  const netPrice = amountToPay - commission;
+  // Net Price = (totalAmountToBePay + roinetMarkup + txnFees + add-ons) - commission
+  const netPrice = Math.ceil((totalAmountToBePay + Math.ceil(skyvooMarkup) + transactionFee + totalBaggageMealSeatAmount) - Math.ceil(commission));
 
   const calculateTotal = useMemo(() => {
-    const currentSubtotal = subtotal + totalBaggageCost + totalMealCost + selectedSeatCost;
+    const currentSubtotal = subtotal + totalBaggageMealSeatAmount;
     if (!selectedCoupon) return currentSubtotal;
     const { discountType, value } = selectedCoupon;
     let discount = 0;
@@ -407,7 +1003,7 @@ export default function ReviewDetails() {
     else if (discountType === "percent")
       discount = Math.min((currentSubtotal * value) / 100, 800);
     return Math.max(currentSubtotal - discount, 0);
-  }, [selectedCoupon, subtotal, totalBaggageCost, totalMealCost, selectedSeatCost]);
+  }, [selectedCoupon, subtotal, totalBaggageMealSeatAmount]);
 
   const handleOpenBaggageModal = (category, index, label) => {
     const traveller = travellers[category]?.[index];
@@ -437,46 +1033,268 @@ export default function ReviewDetails() {
     }
   };
 
-  const handleSelectSeatModal = () => {
+  // Collect ALL flight segments across all trips in fareReviewData.TripInfo
+  const allFlightSegments = useMemo(() => {
+    return (fareReviewData?.TripInfo ?? []).flatMap((trip, tripIdx) => {
+      const tripFlightId =
+        trip?.FlightId ||
+        trip?.flightId ||
+        trip?.FlightDetailResponses?.[0]?.FlightId ||
+        trip?.FlightDetailResponses?.[0]?.flightId ||
+        trip?.FlightDetailResponses?.[0]?.SegmentId ||
+        (tripIdx === 0 ? FlightId : undefined);
+      const tripFlightKey = trip?.FlightKey || trip?.FlightKeys;
+      const legs = trip?.FlightDetailResponses ?? [];
+      if (legs.length === 0) {
+        return [{
+          FlightId: tripFlightId,
+          FlightKey: tripFlightKey,
+          AirlineDeparture: trip?.AirlineDeparture,
+          AirlineArrival: trip?.AirlineArrival,
+          DepartureDate: trip?.DepartureDate,
+          DepartureTime: trip?.DepartureTime,
+          ArrivalTime: trip?.ArrivalTime,
+          AirlineName: trip?.AirlineName,
+          AirlineCode: trip?.AirlineCode,
+          FlightNo: trip?.FlightNo,
+          tripIndex: tripIdx,
+        }];
+      }
+      return legs.map((leg) => ({
+        ...leg,
+        FlightId: leg?.FlightId || leg?.flightId || leg?.SegmentId || leg?.segmentId || tripFlightId,
+        FlightKey: leg?.FlightKey || leg?.FlightKeys || tripFlightKey,
+        AirlineDeparture: leg?.AirlineDeparture || trip?.AirlineDeparture,
+        AirlineArrival: leg?.AirlineArrival || trip?.AirlineArrival,
+        DepartureDate: leg?.DepartureDate || trip?.DepartureDate,
+        DepartureTime: leg?.DepartureTime || trip?.DepartureTime,
+        ArrivalTime: leg?.ArrivalTime || trip?.ArrivalTime,
+        AirlineName: leg?.AirlineName || trip?.AirlineName,
+        AirlineCode: leg?.AirlineCode || trip?.AirlineCode,
+        FlightNo: leg?.FlightNo || trip?.FlightNo,
+        tripIndex: tripIdx,
+      }));
+    });
+  }, [fareReviewData, FlightId]);
+
+  const handleSelectSeatModal = (initialSegIdx = 0) => {
+    if (!isSeatAllowed) return;
+
     // Adults + Childs need seats; Infants do NOT get seats
     const totalSeatCount = Adults + Childs;
+
+    const segIdx = Number(initialSegIdx) || 0;
+    const targetSegment = allFlightSegments[segIdx] || allFlightSegments[0];
+
+    const flightKeyList = (targetSegment?.FlightKey
+      ? [targetSegment.FlightKey]
+      : (fareReviewData?.FlightKeyList && fareReviewData.FlightKeyList.length > 0)
+        ? fareReviewData.FlightKeyList
+        : (bookingData?.flightKeyList || []));
+
+    const segFlightSummary = targetSegment ? {
+      airlineName: targetSegment.AirlineName || '',
+      airlineCode: targetSegment.AirlineCode || '',
+      airlineLogoCode: targetSegment.AirlineLogo || targetSegment.AirlineCode || '',
+      flightNo: targetSegment.FlightNo || '',
+      craft: targetSegment.Equipment || targetSegment.Craft || '',
+      depCode: targetSegment.AirlineDeparture?.code || targetSegment.AirlineDeparture?.cityCode || '',
+      depCity: targetSegment.AirlineDeparture?.city || '',
+      depTime: targetSegment.DepartureTime || '',
+      depDate: targetSegment.DepartureDate || '',
+      arrCode: targetSegment.AirlineArrival?.code || targetSegment.AirlineArrival?.cityCode || '',
+      arrCity: targetSegment.AirlineArrival?.city || '',
+      arrTime: targetSegment.ArrivalTime || '',
+      arrDate: targetSegment.ArrivalDate || '',
+      duration: targetSegment.AirlineDuration || '',
+      stops: targetSegment.Stops ?? null,
+    } : flightSummary;
+
+    // Filter only this segment's seats to pass into bookingStore
+    const currentSegSeats = (selectedSeatDetails || [])
+      .filter((s) => (s.segmentIndex !== undefined ? Number(s.segmentIndex) : 0) === segIdx);
+
     bookingStore.set({
       passengers: travellers,
+      paxCounts: { Adults, Childs, Infants },
       totalSeatCount,
       extraBaggageTotal: totalBaggageCost,
       extraMealTotal: totalMealCost,
-      flightKeyList: FlightKeyList,
-      flightId: FlightId,
-      flightSummary: flightSummary
+      flightKeyList: flightKeyList,
+      flightId: targetSegment?.FlightId || FlightId || fareReviewData?.TripInfo?.[0]?.FlightId,
+      flightSummary: segFlightSummary,
+      flightSegments: targetSegment ? [targetSegment] : (allFlightSegments.length > 0 ? [allFlightSegments[0]] : []),
+      selectedSeats: currentSegSeats.map((s) => s.number || s.SeatNo || s.code).filter(Boolean),
+      selectedSeatDetails: currentSegSeats,
     });
+    setTargetSeatSegmentIndex(segIdx);
     setIsFlightSeatMap(true);
   };
 
-  const handleSeatsContinue = ({ selectedSeats, selectedServices, totalAmount, selectedSeatDetails: details = [] }) => {
-    // Save the seat cost and data back into ReviewDetails fare calculation
-    setSelectedSeatCost(totalAmount);
-    setSelectedSeatData({ seats: selectedSeats, services: selectedServices });
-    setSelectedSeatDetails(details);
-    // Persist into bookingStore so payment page can access seat selections
+  const handleSeatsContinue = ({ selectedSeats, selectedServices, totalAmount, selectedSeatDetails: currentSegSeatDetails = [] }) => {
+    // Tag seats from this modal session with the target segment index
+    const remappedSegSeats = currentSegSeatDetails.map((seat) => ({
+      ...seat,
+      segmentIndex: targetSeatSegmentIndex,
+    }));
+
+    // Retain seats selected previously for other flight segments
+    const otherSegSeats = (selectedSeatDetails || []).filter(
+      (s) => (s.segmentIndex !== undefined ? Number(s.segmentIndex) : 0) !== targetSeatSegmentIndex
+    );
+
+    const mergedSeatDetails = [...otherSegSeats, ...remappedSegSeats];
+    const totalSeatPrice = mergedSeatDetails.reduce(
+      (sum, s) => sum + (Number(s.price || s.Amount) || 0),
+      0
+    );
+
+    const allSeatNumbers = Array.from(new Set(mergedSeatDetails.map((s) => s.number || s.SeatNo || s.code).filter(Boolean)));
+
+    setSelectedSeatCost(totalSeatPrice);
+    setSelectedSeatData({ seats: new Set(allSeatNumbers), services: selectedServices });
+    setSelectedSeatDetails(mergedSeatDetails);
+
+    // Persist into bookingStore so payment page can access complete seat selections
     bookingStore.set({
-      seatTotal: totalAmount,
-      selectedSeats: Array.from(selectedSeats),
+      seatTotal: totalSeatPrice,
+      selectedSeats: allSeatNumbers,
       selectedServices,
-      // Full seat detail objects (in selection order, index = passenger order)
-      selectedSeatDetails: details,
+      selectedSeatDetails: mergedSeatDetails,
     });
     setIsFlightSeatMap(false);
   };
+
+  // Compute per-trip baggage (connecting flights share baggage, depart vs return differ)
+  const allTripBaggageData = useMemo(() => {
+    const tripList = fareReviewData?.TripInfo || [];
+    return tripList.map((trip, tIdx) => {
+      const legs = trip?.FlightDetailResponses || [];
+      const first = legs[0];
+      const last = legs[legs.length - 1] || first;
+      const dep = first?.AirlineDeparture?.city || first?.AirlineDeparture?.code || trip?.AirlineDeparture?.city || trip?.AirlineDeparture?.code || "";
+      const arr = last?.AirlineArrival?.city || last?.AirlineArrival?.code || trip?.AirlineArrival?.city || trip?.AirlineArrival?.code || "";
+      const routeStr = dep && arr ? `${dep} → ${arr}` : "";
+      const title = tripList.length > 1
+        ? (tIdx === 0 ? "Departure Flight" : (tIdx === 1 ? "Return Flight" : `Trip ${tIdx + 1}`))
+        : "Flight Journey";
+
+      const tripFlightId =
+        trip?.FlightId ||
+        trip?.flightId ||
+        first?.FlightId ||
+        first?.flightId ||
+        first?.SegmentId ||
+        trip?.FlightDetailResponses?.[0]?.FlightId ||
+        (tIdx === 0 ? FlightId : undefined);
+
+      const tripBaggageRaw = trip?.TripBaggageList || [];
+      // Flatten BaggageList from segments or handle direct array
+      let extractedBaggage = [];
+      if (Array.isArray(tripBaggageRaw)) {
+        extractedBaggage = tripBaggageRaw.flatMap((bSeg) => {
+          if (!bSeg) return [];
+          const segFId = bSeg.SegmentId || bSeg.segmentId || bSeg.FlightId || bSeg.flightId || bSeg.Key || tripFlightId;
+          if (Array.isArray(bSeg)) return bSeg;
+          if (bSeg.BaggageList && Array.isArray(bSeg.BaggageList)) {
+            return bSeg.BaggageList.map((b) => ({ ...b, FlightId: b.FlightId || b.SegmentId || segFId, SegmentId: b.SegmentId || b.FlightId || segFId }));
+          }
+          if (bSeg.BaggageDetails && Array.isArray(bSeg.BaggageDetails)) {
+            return bSeg.BaggageDetails.map((b) => ({ ...b, FlightId: b.FlightId || b.SegmentId || segFId, SegmentId: b.SegmentId || b.FlightId || segFId }));
+          }
+          if (bSeg.BaggageDynamic && Array.isArray(bSeg.BaggageDynamic)) {
+            return bSeg.BaggageDynamic.map((b) => ({ ...b, FlightId: b.FlightId || b.SegmentId || segFId, SegmentId: b.SegmentId || b.FlightId || segFId }));
+          }
+          if (bSeg.Baggage && Array.isArray(bSeg.Baggage)) {
+            return bSeg.Baggage.map((b) => ({ ...b, FlightId: b.FlightId || b.SegmentId || segFId, SegmentId: b.SegmentId || b.FlightId || segFId }));
+          }
+          return [{ ...bSeg, FlightId: bSeg.FlightId || bSeg.SegmentId || segFId, SegmentId: bSeg.SegmentId || bSeg.FlightId || segFId }];
+        });
+      }
+
+      // Deduplicate items within the trip
+      const uniqueItems = [];
+      const seen = new Set();
+      extractedBaggage.forEach((b) => {
+        const id = b.SSRKey || b.Code || b.Description || b.Desc || b.Weight || JSON.stringify(b);
+        if (id && !seen.has(id)) {
+          seen.add(id);
+          uniqueItems.push({
+            ...b,
+            tripIndex: tIdx,
+            TripType: tIdx,
+            FlightId: b.FlightId || b.SegmentId || tripFlightId,
+            SegmentId: b.SegmentId || b.FlightId || tripFlightId,
+          });
+        }
+      });
+
+      return {
+        tripIndex: tIdx,
+        title,
+        route: routeStr,
+        sectorKey: `${first?.AirlineDeparture?.code || ''}-${last?.AirlineArrival?.code || ''}`.toUpperCase(),
+        baggageList: uniqueItems,
+        flightId: tripFlightId,
+      };
+    });
+  }, [fareReviewData, FlightId]);
+
+  // Compute per-segment meals (meal selection is per flight segment, matching seat selection)
+  const allTripMealData = useMemo(() => {
+    return (allFlightSegments || []).map((seg, sIdx) => {
+      const dep = seg?.AirlineDeparture?.code || seg?.AirlineDeparture?.city || "";
+      const arr = seg?.AirlineArrival?.code || seg?.AirlineArrival?.city || "";
+      const sectorStr = dep && arr ? `${dep} → ${arr}` : `Segment ${sIdx + 1}`;
+
+      const trip = fareReviewData?.TripInfo?.[seg.tripIndex ?? 0];
+      const tripMeals = trip?.TripMealList || [];
+      let segmentMealItems = [];
+      if (Array.isArray(tripMeals) && tripMeals.length > 0) {
+        const matchedMealSeg = tripMeals.find(
+          (mSeg) => String(mSeg.SegmentId || mSeg.FlightId || mSeg.Key || '') === String(seg.FlightId || seg.SegmentId || '')
+        );
+        if (matchedMealSeg) {
+          const raw = matchedMealSeg.MealList || matchedMealSeg.MealDynamic || matchedMealSeg.MealDetails || matchedMealSeg.Meals || [];
+          segmentMealItems = Array.isArray(raw) ? raw : [raw];
+        } else if (tripMeals[sIdx]?.MealList || tripMeals[sIdx]?.MealDynamic || tripMeals[sIdx]?.MealDetails) {
+          const raw = tripMeals[sIdx].MealList || tripMeals[sIdx].MealDynamic || tripMeals[sIdx].MealDetails || [];
+          segmentMealItems = Array.isArray(raw) ? raw : [raw];
+        } else if (tripMeals[0]?.MealList || tripMeals[0]?.MealDynamic || tripMeals[0]?.MealDetails) {
+          const raw = tripMeals[0].MealList || tripMeals[0].MealDynamic || tripMeals[0].MealDetails || [];
+          segmentMealItems = Array.isArray(raw) ? raw : [raw];
+        } else {
+          segmentMealItems = tripMeals.flatMap((m) => {
+            if (m.MealList && Array.isArray(m.MealList)) return m.MealList;
+            if (m.MealDynamic && Array.isArray(m.MealDynamic)) return m.MealDynamic;
+            if (m.MealDetails && Array.isArray(m.MealDetails)) return m.MealDetails;
+            return [m];
+          });
+        }
+      }
+
+      return {
+        segmentIndex: sIdx,
+        tripIndex: seg.tripIndex ?? 0,
+        FlightId: seg.FlightId,
+        Sector: `${dep}-${arr}`.toUpperCase(),
+        sectorLabel: sectorStr,
+        airlineCode: seg.AirlineCode,
+        flightNo: seg.FlightNo,
+        mealList: segmentMealItems,
+      };
+    });
+  }, [allFlightSegments, fareReviewData]);
 
   const handleRemoveSingleBaggage = (category, index, itemId) => {
     setTravellers((prev) => {
       const updatedCat = [...prev[category]];
       if (updatedCat[index]) {
-        const getItemId = (item) => item.SSRKey || item.Code || item.Description;
+        const getItemId = (item) => `${item.tripIndex ?? 0}_${item.SSRKey || item.Code || item.Description}`;
         const currentList = updatedCat[index].selectedBaggage || [];
         updatedCat[index] = {
           ...updatedCat[index],
-          selectedBaggage: currentList.filter((b) => getItemId(b) !== itemId),
+          selectedBaggage: currentList.filter((b) => getItemId(b) !== itemId && (b.SSRKey || b.Code || b.Description) !== itemId),
         };
       }
       return { ...prev, [category]: updatedCat };
@@ -515,11 +1333,11 @@ export default function ReviewDetails() {
     setTravellers((prev) => {
       const updatedCat = [...prev[category]];
       if (updatedCat[index]) {
-        const getItemId = (item) => item.SSRKey || item.Code || item.Description;
+        const getItemId = (item) => `${item.segmentIndex ?? 0}_${item.SSRKey || item.Code || item.Description}`;
         const currentList = updatedCat[index].selectedMeals || [];
         updatedCat[index] = {
           ...updatedCat[index],
-          selectedMeals: currentList.filter((m) => getItemId(m) !== itemId),
+          selectedMeals: currentList.filter((m) => getItemId(m) !== itemId && (m.SSRKey || m.Code || m.Description) !== itemId),
         };
       }
       return { ...prev, [category]: updatedCat };
@@ -550,118 +1368,327 @@ export default function ReviewDetails() {
   const [bookingResult, setBookingResult] = useState(null);
   const [isBookingModalOpen, setIsBookingModalOpen] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
+  const [errorTitle, setErrorTitle] = useState("Booking Failed");
+  const [errorType, setErrorType] = useState("error");
+  const [errorAction, setErrorAction] = useState(null);
+
+  // ─── Flight Booking Payload Builder ─────────────────────────────────────────
+  const getBookingPayload = (customPgTxnId = null) => {
+    const list = [];
+    const mapPaxType = (key) =>
+      key === "Adults" ? "ADULT" : key === "Childs" ? "CHILD" : "INFANT";
+    const mapTitle = (gender, paxType) => {
+      const isFemale = String(gender || "").trim().toUpperCase() === "FEMALE";
+      const cleanPaxType = String(paxType || "").trim().toUpperCase();
+      if (cleanPaxType === "CHILD" || cleanPaxType === "INFANT") {
+        return isFemale ? "MISS" : "MSTR";
+      }
+      return isFemale ? "MS" : "MR";
+    };
+
+    // Get seat details from bookingStore (set in handleSeatsContinue)
+    const storedSeatDetails = bookingStore.get().selectedSeatDetails ?? [];
+
+    // Group storedSeatDetails by segmentIndex
+    const seatsBySegment = {};
+    storedSeatDetails.forEach((seat) => {
+      const segIdx = seat.segmentIndex !== undefined ? Number(seat.segmentIndex) : "0";
+      if (!seatsBySegment[segIdx]) seatsBySegment[segIdx] = [];
+      seatsBySegment[segIdx].push(seat);
+    });
+
+    // Helper to map SSR items to API format (Key = SegmentId, Code = SSR Key / Token)
+    const mapSSRItem = (item) => {
+      if (!item) return null;
+      const ssrCode = item.Key ?? item.SSRKey ?? item.Code ?? item.SSRCode ?? "";
+
+      const isReturnItem =
+        Number(item.TripType) === 1 ||
+        Number(item.tripIndex) === 1 ||
+        Number(item.TripType) > 0 ||
+        Number(item.tripIndex) > 0 ||
+        Boolean(item.isReturn) ||
+        Boolean(item.isReturnTrip);
+
+      const returnTripObj = fareReviewData?.TripInfo?.[1];
+      const returnTripFlightId =
+        returnTripObj?.FlightDetailResponses?.[0]?.FlightId ||
+        returnTripObj?.FlightDetailResponses?.[0]?.flightId ||
+        returnTripObj?.FlightDetailResponses?.[0]?.SegmentId ||
+        returnTripObj?.FlightId ||
+        returnTripObj?.flightId;
+
+      const outboundTripObj = fareReviewData?.TripInfo?.[0];
+      const outboundTripFlightId =
+        outboundTripObj?.FlightDetailResponses?.[0]?.FlightId ||
+        outboundTripObj?.FlightDetailResponses?.[0]?.flightId ||
+        outboundTripObj?.FlightDetailResponses?.[0]?.SegmentId ||
+        outboundTripObj?.FlightId ||
+        outboundTripObj?.flightId ||
+        FlightId ||
+        0;
+
+      // Try matching by Sector if available
+      let segBySectorFlightId = null;
+      if (item.Sector) {
+        const normSector = String(item.Sector).replace(/\s+/g, "").replace("→", "-").toUpperCase();
+        const matchedSeg = (allFlightSegments || []).find((s) => {
+          const dep = s?.AirlineDeparture?.code || s?.AirlineDeparture?.cityCode || "";
+          const arr = s?.AirlineArrival?.code || s?.AirlineArrival?.cityCode || "";
+          const sSector = `${dep}-${arr}`.toUpperCase();
+          return sSector === normSector || (dep && arr && normSector.includes(dep) && normSector.includes(arr));
+        });
+        if (matchedSeg?.FlightId) {
+          segBySectorFlightId = matchedSeg.FlightId;
+        }
+      }
+
+      // Try matching by segmentIndex if available
+      let segByIndexFlightId = null;
+      if (item.segmentIndex !== undefined && allFlightSegments?.[Number(item.segmentIndex)]) {
+        segByIndexFlightId = allFlightSegments[Number(item.segmentIndex)]?.FlightId;
+      }
+
+      let segId;
+      if (isReturnItem) {
+        // Return SSR MUST use return flight's Key
+        segId =
+          (item.FlightId && String(item.FlightId) !== String(outboundTripFlightId) ? item.FlightId : null) ??
+          (item.SegmentId && String(item.SegmentId) !== String(outboundTripFlightId) ? item.SegmentId : null) ??
+          (item.flightId && String(item.flightId) !== String(outboundTripFlightId) ? item.flightId : null) ??
+          (item.segmentId && String(item.segmentId) !== String(outboundTripFlightId) ? item.segmentId : null) ??
+          (segBySectorFlightId && String(segBySectorFlightId) !== String(outboundTripFlightId) ? segBySectorFlightId : null) ??
+          (segByIndexFlightId && String(segByIndexFlightId) !== String(outboundTripFlightId) ? segByIndexFlightId : null) ??
+          returnTripFlightId ??
+          item.FlightId ??
+          item.SegmentId ??
+          0;
+      } else {
+        // Outbound SSR
+        segId =
+          (item.FlightId && returnTripFlightId && String(item.FlightId) === String(returnTripFlightId) ? null : item.FlightId) ??
+          (item.SegmentId && returnTripFlightId && String(item.SegmentId) === String(returnTripFlightId) ? null : item.SegmentId) ??
+          item.flightId ??
+          item.segmentId ??
+          segBySectorFlightId ??
+          segByIndexFlightId ??
+          outboundTripFlightId ??
+          0;
+      }
+
+      return {
+        Key: String(segId),
+        Code: ssrCode,
+        TripType: isReturnItem ? 1 : (Number(item.TripType) || 0),
+        Amount: Number(item.Amount ?? item.Total_Amount ?? 0),
+        Description: item.Description ?? item.Name ?? "",
+        ...(item.Sector && { Sector: item.Sector }),
+        ...(item.IsEmdRequired && { IsEmdRequired: true }),
+        ...(item.IsParameterRequired && { IsParameterRequired: true }),
+      };
+    };
+
+    // Build a flat ordered list of pax (Adults first, then Childs — no Infants for seats)
+    const paxList = [
+      ...travellers.Adults.map((t) => ({ t, key: "Adults" })),
+      ...travellers.Childs.map((t) => ({ t, key: "Childs" })),
+    ];
+
+    Object.entries(travellers).forEach(([key, group]) => {
+      group.forEach((t) => {
+        const paxType = mapPaxType(key);
+
+        // Find the global index of this traveller in the paxList (Adults+Childs order)
+        const globalPaxIndex = paxList.findIndex((p) => p.t === t);
+
+        // Find all seats selected for this passenger across all flight segments
+        let paxSeats = [];
+        const segmentIndices = Object.keys(seatsBySegment);
+        if (segmentIndices.length > 0) {
+          segmentIndices.forEach((segIdx) => {
+            const segList = seatsBySegment[segIdx] || [];
+            const matchingSeat = segList.find(
+              (s) => Number(s.paxIndex) === globalPaxIndex
+            );
+            if (matchingSeat) {
+              paxSeats.push(matchingSeat);
+            }
+          });
+        } else if (storedSeatDetails.length > 0 && paxList.length === 1 && globalPaxIndex === 0) {
+          paxSeats = storedSeatDetails;
+        }
+
+        let seatSSRs = paxSeats.map((seatObj) => {
+          const raw = seatObj.raw || seatObj;
+          const seatNum = raw.SeatNo ?? raw.SeatCode ?? seatObj.number ?? "";
+          const seatCode = raw.Key ?? raw.SSRKey ?? seatObj.SSRKey ?? seatObj.Key ?? seatNum ?? "";
+          const segIdx = seatObj.segmentIndex !== undefined ? Number(seatObj.segmentIndex) : 0;
+          const targetSeg = allFlightSegments[segIdx];
+          
+          const tripType = targetSeg?.tripIndex !== undefined
+            ? targetSeg.tripIndex
+            : (raw.TripType !== undefined ? raw.TripType : 0);
+          const isReturnSeat = Number(tripType) === 1 || Number(tripType) > 0;
+
+          const returnTripObj = fareReviewData?.TripInfo?.[1];
+          const returnTripFlightId =
+            returnTripObj?.FlightDetailResponses?.[0]?.FlightId ||
+            returnTripObj?.FlightDetailResponses?.[0]?.flightId ||
+            returnTripObj?.FlightDetailResponses?.[0]?.SegmentId ||
+            returnTripObj?.FlightId ||
+            returnTripObj?.flightId;
+
+          const outboundTripObj = fareReviewData?.TripInfo?.[0];
+          const outboundTripFlightId =
+            outboundTripObj?.FlightDetailResponses?.[0]?.FlightId ||
+            outboundTripObj?.FlightDetailResponses?.[0]?.flightId ||
+            outboundTripObj?.FlightDetailResponses?.[0]?.SegmentId ||
+            outboundTripObj?.FlightId ||
+            FlightId ||
+            0;
+
+          let segFlightId;
+          if (isReturnSeat) {
+            segFlightId =
+              (targetSeg?.FlightId && String(targetSeg.FlightId) !== String(outboundTripFlightId) ? targetSeg.FlightId : null) ||
+              (targetSeg?.flightId && String(targetSeg.flightId) !== String(outboundTripFlightId) ? targetSeg.flightId : null) ||
+              (seatObj.FlightId && String(seatObj.FlightId) !== String(outboundTripFlightId) ? seatObj.FlightId : null) ||
+              (raw.FlightId && String(raw.FlightId) !== String(outboundTripFlightId) ? raw.FlightId : null) ||
+              (raw.SegmentId && String(raw.SegmentId) !== String(outboundTripFlightId) ? raw.SegmentId : null) ||
+              targetSeg?.SegmentId ||
+              returnTripFlightId ||
+              0;
+          } else {
+            segFlightId =
+              targetSeg?.FlightId ||
+              targetSeg?.flightId ||
+              seatObj.FlightId ||
+              seatObj.flightId ||
+              raw.FlightId ||
+              raw.flightId ||
+              raw.SegmentId ||
+              raw.segmentId ||
+              outboundTripFlightId ||
+              0;
+          }
+
+          return {
+            Key: String(segFlightId),
+            Code: seatCode,
+            TripType: Number(tripType) || 0,
+            Amount: Number(raw.Amount ?? raw.Total_Amount ?? seatObj.price ?? 0),
+            Description: raw.SeatClass ?? seatObj.classType ?? seatNum ?? "Seat",
+            ...(raw.IsEmdRequired && { IsEmdRequired: true }),
+            ...(raw.IsParameterRequired && { IsParameterRequired: true }),
+          };
+        });
+
+        const baggageSSRs = (t.selectedBaggage ?? []).map(mapSSRItem).filter(Boolean);
+        const mealSSRs = (t.selectedMeals ?? []).map(mapSSRItem).filter(Boolean);
+
+        const ssrBaggageFlag = baggageSSRs.length > 0;
+        const ssrMealFlag = mealSSRs.length > 0;
+        const ssrSeatFlag = seatSSRs.length > 0;
+
+        const returnBaggageFlag = (t.selectedBaggage ?? []).some(
+          (b) => Number(b.TripType) === 1 || Number(b.tripIndex) === 1 || Number(b.TripType) > 0 || Number(b.tripIndex) > 0 || b.isReturn
+        ) || baggageSSRs.some((b) => Number(b.TripType) === 1 || Number(b.TripType) > 0);
+
+        const returnMealFlag = (t.selectedMeals ?? []).some(
+          (m) => Number(m.TripType) === 1 || Number(m.tripIndex) === 1 || Number(m.TripType) > 0 || Number(m.tripIndex) > 0 || m.isReturn
+        ) || mealSSRs.some((m) => Number(m.TripType) === 1 || Number(m.TripType) > 0);
+
+        const returnSeatFlag = seatSSRs.some((s) => Number(s.TripType) === 1 || Number(s.TripType) > 0);
+
+        const entry = {
+          Title: mapTitle(t.gender, paxType),
+          FirstName: (t.firstName || "").trim().toUpperCase(),
+          LastName: (t.lastName || "").trim().toUpperCase(),
+          PaxType: paxType,
+          ...(ssrBaggageFlag && { SSRBaggageInfosFlag: true, SSRBaggageInfos: baggageSSRs }),
+          ...(ssrMealFlag && { SSRMealInfosFlag: true, SSRMealInfos: mealSSRs }),
+          ...(ssrSeatFlag && { SSRSeatInfosFlag: true, SSRSeatInfos: seatSSRs }),
+          ...(returnBaggageFlag && { ReturnSSRBaggageInfosFlag: true }),
+          ...(returnMealFlag && { ReturnSSRMealInfosFlag: true }),
+          ...(returnSeatFlag && { ReturnSSRSeatInfosFlag: true }),
+        };
+
+        if (t.dob) entry.DateOfBirth = t.dob;
+        if (isPassportSectionVisible || isIntl) {
+          if (t.passportNumber) entry.PassportNumber = t.passportNumber;
+          if (t.passportNationality) entry.PassportNationality = t.passportNationality.toUpperCase();
+          if (t.passportExpiry) entry.PassportExpiryDate = t.passportExpiry;
+          if (t.passportIssued) entry.PasssportIssuedDate = t.passportIssued;
+        }
+
+        list.push(entry);
+      });
+    });
+
+    const hasAnyReturnSeat = list.some((trav) => trav.ReturnSSRSeatInfosFlag) || storedSeatDetails.some((seat) => {
+      const segIdx = seat.segmentIndex !== undefined ? Number(seat.segmentIndex) : 0;
+      const targetSeg = allFlightSegments[segIdx];
+      return (targetSeg?.tripIndex !== undefined && targetSeg.tripIndex > 0) || Number(seat.raw?.TripType) > 0 || Number(seat.TripType) > 0;
+    });
+    const hasAnyReturnBaggage = list.some((trav) => trav.ReturnSSRBaggageInfosFlag);
+    const hasAnyReturnMeal = list.some((trav) => trav.ReturnSSRMealInfosFlag);
+
+    const bookingKey = fareReviewData?.BookingKey ?? "";
+    const flightKeys = fareReviewData?.FlightKeyList ?? [];
+    const travelType = bookingStore.get().travelType ?? (isIntl ? 1 : 0);
+    const vendor = fareReviewData?.TripInfo?.[0]?.Vendor ?? fareReviewData?.Vendor ?? "";
+    const pgTxnId = customPgTxnId || bookingStore.get().pgTransactionId || bookingStore.get().PGTransactionId;
+
+    const hasGstInfo =
+      isGstApplicable &&
+      (isGstMandatory || useGst) &&
+      Boolean(gstDetails.gstNumber?.trim() || gstDetails.registeredName?.trim());
+
+    return {
+      Vendor: vendor,
+      TravelType: travelType,
+      FlightKeys: flightKeys,
+      BookingKey: bookingKey,
+      PaymentInfoList: [
+        {
+          BookingAmount: totalFare + Number(totalBaggageMealSeatAmount), //replace with amountToPay
+        },
+      ],
+      TravellerInfoList: list,
+      DeliveryInfo: {
+        Emails: contactDetails.email?.trim() ? [contactDetails.email.trim()] : [],
+        Contacts: contactDetails.mobile?.trim() ? [contactDetails.mobile.trim()] : [],
+      },
+      ...(hasGstInfo
+        ? {
+          GstInfo: {
+            gstNumber: (gstDetails.gstNumber || "").trim().toUpperCase(),
+            email: (gstDetails.email || "").trim(),
+            registeredName: (gstDetails.registeredName || "").trim(),
+            mobile: String(gstDetails.mobile) || "",
+            address: (gstDetails.address || "").trim(),
+          },
+        }
+        : {}),
+      ...(pgTxnId && Number(pgTxnId) !== 0
+        ? {
+          PGTransactionId: pgTxnId,
+          IsPgTransactionId: true,
+          isPgTransactionId: true,
+        }
+        : {}),
+      PaymentFlag: true,
+      GstInFlag: hasGstInfo ? true : false,
+      ...(hasAnyReturnBaggage && { ReturnSSRBaggageInfosFlag: true }),
+      ...(hasAnyReturnMeal && { ReturnSSRMealInfosFlag: true }),
+      ...(hasAnyReturnSeat && { ReturnSSRSeatInfosFlag: true })
+    };
+  };
 
   // ─── Flight Booking Mutation ──────────────────────────────────────────────────
   const bookingMutation = useMutation({
     mutationFn: async () => {
-      const bookingData = bookingStore.get();
-
-      // Build TravellerInfoList from travellers state
-      const buildTravellerList = () => {
-        const list = [];
-        const mapPaxType = (key) =>
-          key === "Adults" ? "ADULT" : key === "Childs" ? "CHILD" : "INFANT";
-        const mapTitle = (gender) => (gender === "FEMALE" ? "MS" : "MR");
-
-        // Get seat details from bookingStore (set in handleSeatsContinue)
-        // selectedSeatDetails is an ORDERED array: index 0 = pax 0, index 1 = pax 1 ...
-        const storedSeatDetails = bookingStore.get().selectedSeatDetails ?? [];
-
-        // Helper to map SSR items to API format
-        const mapSSRItem = (item) => ({
-          Key: item.Key ?? item.SSRKey ?? "",
-          Code: item.Code ?? "",
-          TripType: item.TripType ?? 0,
-          Amount: Number(item.Amount) ?? 0,
-          Description: item.Description ?? "",
-          ...(item.IsEmdRequired && { IsEmdRequired: true }),
-          ...(item.IsParameterRequired && { IsParameterRequired: true }),
-        });
-
-        // Build a flat ordered list of pax (Adults first, then Childs — no Infants for seats)
-        const paxList = [
-          ...travellers.Adults.map((t) => ({ t, key: "Adults" })),
-          ...travellers.Childs.map((t) => ({ t, key: "Childs" })),
-        ];
-
-        Object.entries(travellers).forEach(([key, group]) => {
-          group.forEach((t) => {
-            const paxType = mapPaxType(key);
-
-            // Find the global index of this traveller in the paxList (Adults+Childs order)
-            const globalPaxIndex = paxList.findIndex((p) => p.t === t);
-
-            // The seat selected for this pax (by order of selection)
-            const seatObj = globalPaxIndex >= 0 ? storedSeatDetails[globalPaxIndex] : null;
-
-            let seatSSRs = [];
-            if (seatObj) {
-              const raw = seatObj.raw || seatObj;
-              seatSSRs = [{
-                Key: raw.Key ?? raw.SSRKey ?? "",
-                Code: raw.SeatNo ?? raw.SeatCode ?? seatObj.number ?? "",
-                TripType: raw.TripType ?? 0,
-                Amount: Number(raw.Amount ?? raw.Total_Amount ?? seatObj.price ?? 0),
-                Description: raw.SeatClass ?? seatObj.classType ?? raw.SeatNo ?? "",
-                ...(raw.IsEmdRequired && { IsEmdRequired: true }),
-                ...(raw.IsParameterRequired && { IsParameterRequired: true }),
-              }];
-            }
-
-            const baggageSSRs = (t.selectedBaggage ?? []).map(mapSSRItem);
-            const mealSSRs = (t.selectedMeals ?? []).map(mapSSRItem);
-
-            const ssrBaggageFlag = baggageSSRs.length > 0;
-            const ssrMealFlag = mealSSRs.length > 0;
-            const ssrSeatFlag = seatSSRs.length > 0;
-
-            const entry = {
-              Title: mapTitle(t.gender),
-              FirstName: (t.firstName || "").trim().toUpperCase(),
-              LastName: (t.lastName || "").trim().toUpperCase(),
-              PaxType: paxType,
-              ...(ssrBaggageFlag && { SSRBaggageInfosFlag: true, SSRBaggageInfos: baggageSSRs }),
-              ...(ssrMealFlag && { SSRMealInfosFlag: true, SSRMealInfos: mealSSRs }),
-              ...(ssrSeatFlag && { SSRSeatInfosFlag: true, SSRSeatInfos: seatSSRs }),
-            };
-
-            if (t.dob) entry.DateOfBirth = t.dob;
-            if (t.passportNumber) entry.PassportNumber = t.passportNumber;
-            if (t.passportNationality) entry.PassportNationality = t.passportNationality.toUpperCase();
-            if (t.passportExpiry) entry.PassportExpiryDate = t.passportExpiry;
-            if (t.passportIssued) entry.PasssportIssuedDate = t.passportIssued;
-
-            list.push(entry);
-          });
-        });
-        return list;
-      };
-
-      // BookingKey & FlightKeys from fareReviewData
-      const bookingKey = fareReviewData?.BookingKey ?? "";
-      const flightKeys = fareReviewData?.FlightKeyList ?? [];
-      const travelType = bookingStore.get().travelType ?? 0;
-      const vendor = fareReviewData?.TripInfo?.[0]?.Vendor ?? fareReviewData?.Vendor ?? "";
-
-      // BookingAmount = amountToPay
-      const payload = {
-        Vendor: vendor,
-        TravelType: travelType,
-        FlightKeys: flightKeys,
-        BookingKey: bookingKey,
-        PaymentInfoList: [
-          {
-            BookingAmount: amountToPay,
-          },
-        ],
-        TravellerInfoList: buildTravellerList(),
-        DeliveryInfo: {
-          Emails: travellers.Adults.map((t) => t.email).filter(Boolean),
-          Contacts: travellers.Adults.map((t) => t.mobile).filter(Boolean),
-        },
-        PGTransactionId: 0,
-        PaymentFlag: true,
-      };
+      const payload = getBookingPayload();
 
       let res;
       try {
@@ -669,32 +1696,71 @@ export default function ReviewDetails() {
       } catch (axiosErr) {
         const apiMsg =
           axiosErr?.response?.data?.ErrorMessage ||
+          axiosErr?.response?.data?.errorMessage ||
           axiosErr?.response?.data?.message ||
+          axiosErr?.response?.data?.Message ||
           axiosErr?.message ||
           "Booking failed. Please try again.";
         throw new Error(apiMsg);
       }
 
       if (!res.data?.IsSuccess) {
-        throw new Error(res.data?.ErrorMessage || "Booking failed. Please try again.");
+        const errMsg =
+          res.data?.ErrorMessage ||
+          res.data?.errorMessage ||
+          res.data?.message ||
+          res.data?.Message ||
+          "Booking failed. Please try again.";
+        throw new Error(errMsg);
       }
 
       return res.data;
     },
     onSuccess: (data) => {
-      // Parse the nested BookingResponse JSON string
-      let parsed = null;
+      // Clear booking session & localStorage on successful booking
+      bookingStore.reset();
+      localStorage.removeItem("skyvoo_booking");
+      sessionStorage.removeItem("skyvoo_booking");
+      localStorage.removeItem("skyvoo_pending_booking_payload");
+      localStorage.removeItem("skyvoo_pg_txn_id");
+
+      const bookingData = data?.Data;
+      let bookingId = "";
+      let bookingStatus = "S";
       try {
-        const raw = data?.Data?.BookingResponse;
-        parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+        const raw = bookingData?.BookingResponse;
+        const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+        bookingId = parsed?.Order?.BookingId || "";
+        bookingStatus = parsed?.Order?.BookingStatus || "S";
       } catch {
-        parsed = null;
+        // fallback
       }
-      setBookingResult({ raw: data, parsed });
-      setIsBookingModalOpen(true);
+
+      const txId = bookingData?.TransactionId || bookingData?.FlightTransactionId || "";
+      const vendor = bookingData?.Vendor || "AF";
+
+      window.location.href = `/booking-details?TransactionId=${txId}&BookingId=${encodeURIComponent(bookingId)}&BookingStatus=${encodeURIComponent(bookingStatus)}&Vendor=${encodeURIComponent(vendor)}`;
     },
     onError: (err) => {
-      setErrorMessage(err?.message || "Booking failed. Please try again.");
+      setIsDisclaimerModalOpen(false);
+      const rawMsg = String(err?.message || "").trim();
+      const isQueued = /^(queued|queue|pending|booking is queued|booking is pending)$/i.test(rawMsg);
+      if (isQueued) {
+        setErrorTitle("Booking Pending");
+        setErrorType("warning");
+        setErrorMessage(
+          rawMsg || "Your booking is in pending state. Please check your bookings after some time."
+        );
+        setErrorAction({
+          text: "Go to My Bookings",
+          onClick: () => navigate("/my-bookings"),
+        });
+      } else {
+        setErrorTitle("Booking Failed");
+        setErrorType("error");
+        setErrorMessage(rawMsg || "Booking failed. Please try again.");
+        setErrorAction(null);
+      }
     },
   });
 
@@ -703,29 +1769,83 @@ export default function ReviewDetails() {
     if (travellers.Childs.length < Childs) return false;
     if (travellers.Infants.length < Infants) return false;
 
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+    // Contact Details Validation
+    if (
+      !contactDetails.mobile?.trim() ||
+      contactDetails.mobile.replace(/\D/g, "").length !== 10 ||
+      !contactDetails.email?.trim() ||
+      !emailRegex.test(contactDetails.email.trim())
+    ) {
+      return false;
+    }
+
     for (let i = 0; i < travellers.Adults.length; i++) {
       const a = travellers.Adults[i];
-      if (!a.firstName?.trim() || !a.lastName?.trim() || !a.dob || !a.mobile?.trim() || !a.email?.trim()) {
+      if (
+        getTravellerNameError(a.firstName, "First & Middle Name") ||
+        getTravellerNameError(a.lastName, "Last Name") ||
+        (isAdultDobRequired && getAdultDobError(a.dob)) ||
+        getTravellerPassportError(a)
+      ) {
         return false;
-      }
-      if (isIntl) {
-        if (!a.passportNumber?.trim() || !a.passportNationality?.trim() || !a.passportIssued || !a.passportExpiry) {
-          return false;
-        }
       }
     }
 
     for (let i = 0; i < travellers.Childs.length; i++) {
       const c = travellers.Childs[i];
-      if (!c.firstName?.trim() || !c.lastName?.trim() || !c.dob) {
+      if (
+        getTravellerNameError(c.firstName, "First & Middle Name") ||
+        getTravellerNameError(c.lastName, "Last Name") ||
+        (isChildDobRequired && getChildDobError(c.dob)) ||
+        getTravellerPassportError(c)
+      ) {
         return false;
       }
     }
 
     for (let i = 0; i < travellers.Infants.length; i++) {
       const inf = travellers.Infants[i];
-      if (!inf.firstName?.trim() || !inf.lastName?.trim() || !inf.dob || !inf.accompanyingAdult?.trim()) {
+      if (
+        getTravellerNameError(inf.firstName, "First & Middle Name") ||
+        getTravellerNameError(inf.lastName, "Last Name") ||
+        getTravellerNameError(inf.accompanyingAdult, "Accompanying Adult Name") ||
+        (isInfantDobRequired && getInfantDobError(inf.dob)) ||
+        getTravellerPassportError(inf)
+      ) {
         return false;
+      }
+    }
+
+    // GST validation
+    if (isGstApplicable) {
+      if (isGstMandatory) {
+        if (
+          !gstDetails.gstNumber?.trim() ||
+          !gstDetails.registeredName?.trim() ||
+          !gstDetails.email?.trim() ||
+          !gstDetails.mobile?.toString().trim() ||
+          !gstDetails.address?.trim()
+        ) {
+          return false;
+        }
+        if (!emailRegex.test(gstDetails.email.trim())) {
+          return false;
+        }
+        if (gstDetails.gstNumber.trim().length !== 15) {
+          return false;
+        }
+      } else if (useGst) {
+        if (!gstDetails.gstNumber?.trim() || !gstDetails.registeredName?.trim()) {
+          return false;
+        }
+        if (gstDetails.gstNumber.trim().length !== 15) {
+          return false;
+        }
+        if (gstDetails.email?.trim() && !emailRegex.test(gstDetails.email.trim())) {
+          return false;
+        }
       }
     }
 
@@ -733,21 +1853,89 @@ export default function ReviewDetails() {
   };
 
   const handleContinue = () => {
-    setShowValidationErrors(true);
-    if (!validateForm()) {
-      handleScroll("traveller-details");
+    // If not logged in, show login modal instead
+    if (!isLoggedIn) {
+      setIsLoginModalOpen(true);
       return;
     }
-    bookingMutation.mutate();
+    // If price changed and not acknowledged yet, open FareAlertModal
+    if (fareAlert && !hasUserAcceptedFareAlert) {
+      setIsFareAlertModalOpen(true);
+      return;
+    }
+    setShowValidationErrors(true);
+    if (!validateForm()) {
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      const isContactInvalid =
+        !contactDetails.mobile?.trim() ||
+        contactDetails.mobile.replace(/\D/g, "").length !== 10 ||
+        !contactDetails.email?.trim() ||
+        !emailRegex.test(contactDetails.email.trim());
+
+      const isGstInvalid =
+        isGstApplicable &&
+        ((isGstMandatory && (!gstDetails.gstNumber?.trim() || !gstDetails.registeredName?.trim() || !gstDetails.email?.trim() || !gstDetails.mobile?.toString().trim() || !gstDetails.address?.trim() || gstDetails.gstNumber.trim().length !== 15)) ||
+          (useGst && (!gstDetails.gstNumber?.trim() || !gstDetails.registeredName?.trim() || gstDetails.gstNumber.trim().length !== 15)));
+
+      let areTravellersInvalid = false;
+      for (const a of travellers.Adults) {
+        if (
+          getTravellerNameError(a.firstName, "First & Middle Name") ||
+          getTravellerNameError(a.lastName, "Last Name") ||
+          (isAdultDobRequired && getAdultDobError(a.dob)) ||
+          getTravellerPassportError(a)
+        ) {
+          areTravellersInvalid = true;
+          break;
+        }
+      }
+      if (!areTravellersInvalid) {
+        for (const c of travellers.Childs) {
+          if (
+            getTravellerNameError(c.firstName, "First & Middle Name") ||
+            getTravellerNameError(c.lastName, "Last Name") ||
+            (isChildDobRequired && getChildDobError(c.dob)) ||
+            getTravellerPassportError(c)
+          ) {
+            areTravellersInvalid = true;
+            break;
+          }
+        }
+      }
+      if (!areTravellersInvalid) {
+        for (const inf of travellers.Infants) {
+          if (
+            getTravellerNameError(inf.firstName, "First & Middle Name") ||
+            getTravellerNameError(inf.lastName, "Last Name") ||
+            getTravellerNameError(inf.accompanyingAdult, "Accompanying Adult Name") ||
+            (isInfantDobRequired && getInfantDobError(inf.dob)) ||
+            getTravellerPassportError(inf)
+          ) {
+            areTravellersInvalid = true;
+            break;
+          }
+        }
+      }
+
+      if (areTravellersInvalid) {
+        handleScroll("traveller-details");
+      } else if (isContactInvalid) {
+        handleScroll("contact-details");
+      } else if (isGstInvalid) {
+        handleScroll("gst-details");
+      }
+      return;
+    }
+    setIsDisclaimerModalOpen(true);
   };
 
   useEffect(() => {
     const sections = [
       "flight-summary",
-      "travel-insurance",
       "traveller-details",
-      "seats-meals",
-      "add-ons",
+      "contact-details",
+      "seats-section",
+      "gst-details",
     ];
 
     const observer = new IntersectionObserver(
@@ -801,14 +1989,18 @@ export default function ReviewDetails() {
   }
 
   if (fareReviewError && !fareReviewData) {
+    const errorMsg =
+      fareReviewError?.message ||
+      "An unexpected error occurred while reviewing the flight details.";
+
     return (
       <div className="min-h-[70vh] flex flex-col items-center justify-center p-6 text-center">
-        <div className="w-16 h-16 rounded-full bg-red-50 text-[#78080B] flex items-center justify-center mb-4 border border-red-100">
+        <div className="w-16 h-16 rounded-full bg-red-50 text-[#78080B] flex items-center justify-center mb-4 border border-red-100 shadow-sm">
           <ShieldAlert className="w-8 h-8 text-[#78080B]" />
         </div>
-        <h2 className="text-xl font-bold text-slate-800 mb-2">Unable to Load Flight Details</h2>
-        <p className="text-slate-600 text-sm max-w-md mb-6">
-          {fareReviewError?.message || "We couldn't retrieve the latest fare details. The fare may have expired or is temporarily unavailable."}
+        <h2 className="text-xl md:text-2xl font-bold text-slate-800 mb-2">Unable to Load Flight Details</h2>
+        <p className="max-w-lg text-sm text-slate-600 bg-red-50/80 border border-red-100 rounded-xl px-4 py-3 mb-6 leading-relaxed">
+          {errorMsg}
         </p>
         <div className="flex items-center gap-3">
           <button
@@ -832,9 +2024,15 @@ export default function ReviewDetails() {
     <>
       <ErrorModal
         open={!!errorMessage}
-        onClose={() => setErrorMessage("")}
-        title="Booking Failed"
+        onClose={() => {
+          setErrorMessage("");
+          setErrorAction(null);
+        }}
+        title={errorTitle}
         message={errorMessage}
+        type={errorType}
+        actionText={errorAction?.text}
+        onAction={errorAction?.onClick}
       />
       {/* ── Booking Confirmation Modal ── */}
       {isBookingModalOpen && bookingResult && (
@@ -993,8 +2191,8 @@ export default function ReviewDetails() {
                             </div>
                             <div className="flex items-center gap-3">
                               <div className="text-center">
-                                <p className="text-xl font-bold text-slate-800">{dep?.code}</p>
-                                <p className="text-xs text-slate-500">{dep?.name}</p>
+                                <p className="text-xl font-bold text-slate-800">{dep?.code || dep?.cityCode || dep?.city || dep?.name || '—'}</p>
+                                <p className="text-xs text-slate-500">{dep?.name || dep?.city}</p>
                                 <p className="text-xs font-medium text-slate-700">{seg.dt?.split(" ")[1]}</p>
                                 <p className="text-xs text-slate-400">{seg.dt?.split(" ")[0]}</p>
                                 {dep?.terminal && <p className="text-xs text-slate-400 mt-0.5">{dep.terminal}</p>}
@@ -1009,8 +2207,8 @@ export default function ReviewDetails() {
                                 <div className="text-xs text-slate-400">{seg.stops === 0 ? "Non-stop" : `${seg.stops} stop`}</div>
                               </div>
                               <div className="text-center">
-                                <p className="text-xl font-bold text-slate-800">{arr?.code}</p>
-                                <p className="text-xs text-slate-500">{arr?.name}</p>
+                                <p className="text-xl font-bold text-slate-800">{arr?.code || arr?.cityCode || arr?.city || arr?.name || '—'}</p>
+                                <p className="text-xs text-slate-500">{arr?.name || arr?.city}</p>
                                 <p className="text-xs font-medium text-slate-700">{seg.at?.split(" ")[1]}</p>
                                 <p className="text-xs text-slate-400">{seg.at?.split(" ")[0]}</p>
                                 {arr?.terminal && <p className="text-xs text-slate-400 mt-0.5">{arr.terminal}</p>}
@@ -1141,12 +2339,27 @@ export default function ReviewDetails() {
 
       {isFlightSeatMap && (
         <Suspense fallback={null}>
-          <FlightSeatMap
-            onClose={() => setIsFlightSeatMap(false)}
-            flightLegs={FlightsDepartureAndArrivalDetails}
-            onSeatsContinue={handleSeatsContinue}
-            initialSelectedSeats={selectedSeatData?.seats ? Array.from(selectedSeatData.seats) : []}
-          />
+          {(() => {
+            const targetSeg = allFlightSegments[targetSeatSegmentIndex] || allFlightSegments[0];
+            const currentSegInitialDetails = (selectedSeatDetails || [])
+              .filter((s) => (s.segmentIndex !== undefined ? Number(s.segmentIndex) : 0) === targetSeatSegmentIndex)
+              .map((s) => ({ ...s, segmentIndex: 0 }));
+            const currentSegInitialSeats = currentSegInitialDetails.map((s) => s.number || s.SeatNo || s.code).filter(Boolean);
+
+            return (
+              <FlightSeatMap
+                key={`flight-seat-map-segment-${targetSeatSegmentIndex}`}
+                onClose={() => setIsFlightSeatMap(false)}
+                flightLegs={targetSeg ? [targetSeg] : (allFlightSegments.length > 0 ? [allFlightSegments[0]] : FlightsDepartureAndArrivalDetails)}
+                onSeatsContinue={handleSeatsContinue}
+                initialSelectedSeats={currentSegInitialSeats}
+                initialSelectedSeatDetails={currentSegInitialDetails}
+                initialFlightIndex={0}
+                paxCounts={{ Adults, Childs, Infants }}
+                passengers={travellers}
+              />
+            );
+          })()}
         </Suspense>
       )}
 
@@ -1173,6 +2386,7 @@ export default function ReviewDetails() {
               : []
           }
           onSave={handleSaveBaggage}
+          trips={allTripBaggageData}
           baggageList={TripBaggageData}
           routeLabel={(() => {
             const trip = fareReviewData?.TripInfo?.[0];
@@ -1206,6 +2420,7 @@ export default function ReviewDetails() {
               : []
           }
           onSave={handleSaveMeals}
+          segments={allTripMealData}
           mealList={TripMealData}
           routeLabel={(() => {
             const trip = fareReviewData?.TripInfo?.[0];
@@ -1234,14 +2449,14 @@ export default function ReviewDetails() {
       <div className="min-h-screen relative">
         {/* Header */}
         <div
-          className="z-999 bg-[#78080B] text-white py-6 px-4 sticky top-0"
+          className="bg-[#78080B] text-white py-6 px-4 relative z-10"
           style={{ boxShadow: " 0px 4px 4px 0px rgba(0, 0, 0, 0.25)" }}
         >
           <div className="max-w-7xl mx-auto flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <h1 className="text-xl sm:text-2xl font-bold">
               Complete your booking
             </h1>
-            <div className="hidden lg:flex gap-4 text-sm">
+            <div className="hidden lg:flex gap-6 text-sm font-medium">
               <span
                 className="cursor-pointer text-slate-300 hover:text-white transition"
                 onClick={() => handleScroll("flight-summary")}
@@ -1256,25 +2471,27 @@ export default function ReviewDetails() {
               </span>
               <span
                 className="cursor-pointer text-slate-300 hover:text-white transition"
-                onClick={() => handleScroll("seats-meals")}
+                onClick={() => handleScroll("contact-details")}
               >
-                Seats & Meals
+                Contact Details
               </span>
-              <span
-                className="cursor-pointer text-slate-300 hover:text-white transition"
-                onClick={() => handleScroll("add-ons")}
-              >
-                Add-ons
-              </span>
+              {isSeatAllowed && (
+                <span
+                  className="cursor-pointer text-slate-300 hover:text-white transition"
+                  onClick={() => handleScroll("seats-section")}
+                >
+                  Seats
+                </span>
+              )}
             </div>
           </div>
 
-          <div className="flex mt-1 lg:hidden gap-2 overflow-x-auto scrollbar-hide text-sm whitespace-nowrap px-1">
+          <div className="flex mt-1 lg:hidden gap-2 overflow-x-auto no-scrollbar scrollbar-hide text-sm whitespace-nowrap px-1 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
             {[
               ["flight-summary", "Flights Summary"],
               ["traveller-details", "Traveller Details"],
-              ["seats-meals", "Seats & Meals"],
-              ["add-ons", "Add-ons"],
+              ["contact-details", "Contact Details"],
+              ...(isSeatAllowed ? [["seats-section", "Seats"]] : []),
             ].map(([id, label]) => {
               const isActive = activeTab === id;
 
@@ -1291,7 +2508,7 @@ export default function ReviewDetails() {
           </div>
         </div>
 
-        <div className="relative z-20 pb-5 sm:pb-2 bg-cover bg-center">
+        <div className="relative z-20 pb-14 sm:pb-10 bg-cover bg-center">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-6">
             <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 lg:gap-6">
               {/* Main Content */}
@@ -1342,11 +2559,58 @@ export default function ReviewDetails() {
                           const arrTerminal = last?.AirlineArrival?.terminal
                             ? ` T${last.AirlineArrival.terminal}`
                             : "";
-                          const stops =
-                            first.Stops === 0
-                              ? "Non Stop"
-                              : `${first.Stops} Stop`;
-                          const duration = first.AirlineDuration || "";
+                          const stopsCount = legs.length > 1 ? legs.length - 1 : (typeof first.Stops === "number" ? first.Stops : 0);
+                          const layovers = getFlightLayoverAirports(legs);
+                          const stops = formatStopsWithLayovers(stopsCount, layovers);
+
+                          let duration = trip.AirlineDuration || "";
+                          if (!duration && legs.length > 1 && first && last) {
+                            try {
+                              let startDT = null;
+                              let endDT = null;
+                              if (first.DepartureDate && first.DepartureTime) {
+                                startDT = new Date(`${first.DepartureDate.split("T")[0]}T${first.DepartureTime}`);
+                              }
+                              if (last.ArrivalDate && last.ArrivalTime) {
+                                endDT = new Date(`${last.ArrivalDate.split("T")[0]}T${last.ArrivalTime}`);
+                              }
+                              if (startDT && endDT && !isNaN(startDT) && !isNaN(endDT)) {
+                                const diffMs = endDT - startDT;
+                                if (diffMs > 0) {
+                                  const totalMins = Math.round(diffMs / 60000);
+                                  const h = Math.floor(totalMins / 60);
+                                  const m = totalMins % 60;
+                                  duration = `${String(h).padStart(2, "0")}h:${String(m).padStart(2, "0")}m`;
+                                }
+                              }
+                            } catch (_) { }
+                          }
+                          if (!duration) {
+                            if (legs.length > 1) {
+                              let totalMin = 0;
+                              legs.forEach((l, idx) => {
+                                const dStr = l.AirlineDuration || "";
+                                const hMatch = dStr.match(/(\d+)\s*h/i);
+                                const mMatch = dStr.match(/(\d+)\s*m/i);
+                                if (hMatch || mMatch) {
+                                  totalMin += (parseInt(hMatch?.[1] || 0, 10) * 60) + parseInt(mMatch?.[1] || 0, 10);
+                                }
+                                if (idx > 0 && l.ConnectingTime) {
+                                  const ct = parseInt(l.ConnectingTime, 10);
+                                  if (!isNaN(ct)) totalMin += ct;
+                                }
+                              });
+                              if (totalMin > 0) {
+                                const h = Math.floor(totalMin / 60);
+                                const m = totalMin % 60;
+                                duration = `${String(h).padStart(2, "0")}h:${String(m).padStart(2, "0")}m`;
+                              } else {
+                                duration = first.AirlineDuration || "";
+                              }
+                            } else {
+                              duration = first.AirlineDuration || "";
+                            }
+                          }
                           const refundable =
                             trip.Refundable || "NON-Refundable";
                           const fareIdentifier = trip.FareIdentifier || "";
@@ -1372,13 +2636,16 @@ export default function ReviewDetails() {
                                       <h2 className="text-lg sm:text-xl lg:text-2xl font-bold text-slate-900">
                                         {depCity} → {arrCity}
                                       </h2>
-                                      <p className="text-xs sm:text-sm text-slate-600 mt-1 flex flex-wrap gap-2">
-                                        <span className="bg-yellow-50 border border-yellow-200 rounded-lg py-1 px-2">
-                                          {first.DepartureDate || "—"}
-                                        </span>
-                                        <span>
-                                          {stops} · {duration}
-                                        </span>
+                                      <p className="text-xs sm:text-sm text-slate-600 mt-1 flex flex-wrap items-center gap-1.5 font-medium">
+                                        <span>{formatDepartureDate(first.DepartureDate)}</span>
+                                        <span>·</span>
+                                        <span>{stops}</span>
+                                        {duration && (
+                                          <>
+                                            <span>·</span>
+                                            <span>{duration}</span>
+                                          </>
+                                        )}
                                       </p>
                                     </div>
                                   </div>
@@ -1631,33 +2898,7 @@ export default function ReviewDetails() {
                                       <strong>Check-In Baggage:</strong> {checkInBag} / Adult
                                     </span>
                                   </div>
-
-                                  {/* Select Seat */}
-                                  <div className="sm:ml-auto">
-                                    {selectedSeatData?.seats?.size > 0 ? (
-                                      <button
-                                        type="button"
-                                        onClick={handleSelectSeatModal}
-                                        className="flex items-center gap-1.5 text-[#78080B] font-semibold text-sm whitespace-nowrap hover:text-[#5a0608] transition-colors cursor-pointer"
-                                      >
-                                        <span className="inline-flex items-center gap-1 bg-red-50 border border-red-200 text-[#78080B] rounded-full px-2.5 py-0.5 text-xs font-bold">
-                                          ✓ {Array.from(selectedSeatData.seats).join(", ")} · ₹{selectedSeatCost.toLocaleString('en-IN')}
-                                        </span>
-                                        <span className="text-xs text-slate-500 font-medium">· Change</span>
-                                      </button>
-                                    ) : (
-                                      <button
-                                        type="button"
-                                        onClick={handleSelectSeatModal}
-                                        className="text-blue-600 font-semibold text-sm whitespace-nowrap hover:text-blue-700 transition-colors cursor-pointer"
-                                      >
-                                        Select Seat
-                                      </button>
-                                    )}
-                                  </div>
                                 </div>
-
-
                               </div>
                             </div>
                           );
@@ -1733,531 +2974,937 @@ export default function ReviewDetails() {
 
                     {/* Render for each category */}
                     {[
-                      { label: "Adult", key: "Adults", limit: Adults },
-                      { label: "Child", key: "Childs", limit: Childs },
-                      { label: "Infant", key: "Infants", limit: Infants },
-                    ].map(({ label, key, limit }) => (
-                      <div key={key} className="mb-6">
-                        <div className="flex items-center justify-between mb-2">
-                          <h4 className="font-semibold text-slate-800">
-                            {label} Details
-                          </h4>
-                          <span className="text-sm text-slate-500">
-                            {travellers[key].length}/{limit} added
-                          </span>
-                        </div>
+                      { label: "Adult", subtitle: "12y+", key: "Adults", limit: Adults },
+                      { label: "Child", subtitle: "2y - 12y", key: "Childs", limit: Childs },
+                      { label: "Infant", subtitle: "below 2y", key: "Infants", limit: Infants },
+                    ]
+                      .filter(({ limit }) => limit > 0)
+                      .map(({ label, subtitle, key, limit }) => (
+                        <div key={key} className="mb-6">
+                          <div className="flex items-center justify-between mb-2">
+                            <h4 className="font-semibold text-slate-800 flex items-center gap-1.5 flex-wrap">
+                              <span>{label} Details</span>
+                              <span className="text-xs font-medium text-slate-500">({subtitle} on travel date)</span>
+                            </h4>
+                            <span className="text-sm text-slate-500">
+                              {travellers[key].length}/{limit} added
+                            </span>
+                          </div>
 
-                        {travellers[key].map((t, i) => (
-                          <div
-                            key={t.id}
-                            className="mb-4 border border-slate-200 rounded-lg p-4 shadow-sm"
-                          >
-                            <div className="flex items-center justify-between mb-3">
-                              <label className="font-semibold">
-                                {label.toUpperCase()} {i + 1}
-                              </label>
-                              {travellers[key].length > 0 && (
-                                <button
-                                  onClick={() => removeTraveller(key, i)}
-                                  className="cursor-pointer text-[#78080B] hover:text-red-800 font-semibold flex items-center gap-1 text-sm"
-                                >
-                                  <Trash2 className="w-4 h-4" /> Remove
-                                </button>
-                              )}
-                            </div>
-
-                            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
-                              <div className="flex flex-col gap-1">
-                                <input
-                                  type="text"
-                                  placeholder="First & Middle Name"
-                                  value={t.firstName}
-                                  onChange={(e) =>
-                                    updateTraveller(
-                                      key,
-                                      i,
-                                      "firstName",
-                                      e.target.value,
-                                    )
-                                  }
-                                  className={`border rounded px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 ${showValidationErrors && !t.firstName?.trim()
-                                      ? "border-red-500 bg-red-50/20"
-                                      : "border-slate-300"
-                                    }`}
-                                />
-                                {showValidationErrors && !t.firstName?.trim() && (
-                                  <span className="text-[11px] text-red-600 font-medium">First & Middle Name is required</span>
-                                )}
-                              </div>
-                              <div className="flex flex-col gap-1">
-                                <input
-                                  type="text"
-                                  placeholder="Last Name"
-                                  value={t.lastName}
-                                  onChange={(e) =>
-                                    updateTraveller(
-                                      key,
-                                      i,
-                                      "lastName",
-                                      e.target.value,
-                                    )
-                                  }
-                                  className={`border rounded px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 ${showValidationErrors && !t.lastName?.trim()
-                                      ? "border-red-500 bg-red-50/20"
-                                      : "border-slate-300"
-                                    }`}
-                                />
-                                {showValidationErrors && !t.lastName?.trim() && (
-                                  <span className="text-[11px] text-red-600 font-medium">Last Name is required</span>
-                                )}
-                              </div>
-
-                              {/* Gender */}
-                              <div className="flex flex-col sm:flex-row gap-2 h-[38px]">
-                                {["MALE", "FEMALE"].map((g) => (
+                          {travellers[key].map((t, i) => (
+                            <div
+                              key={t.id}
+                              className="mb-4 border border-slate-200 rounded-lg p-4 shadow-sm"
+                            >
+                              <div className="flex items-center justify-between mb-3">
+                                <label className="font-semibold">
+                                  {label.toUpperCase()} {i + 1}
+                                </label>
+                                {travellers[key].length > 0 && (
                                   <button
-                                    key={g}
-                                    type="button"
-                                    onClick={() =>
-                                      updateTraveller(key, i, "gender", g)
-                                    }
-                                    className={`flex-1 py-2 px-4 rounded border text-sm font-medium transition-colors ${t.gender === g
-                                      ? "bg-[#78080B] text-white border-[#78080B]"
-                                      : "bg-white text-slate-700 border-slate-300 hover:border-[#78080B]"
-                                      }`}
+                                    onClick={() => removeTraveller(key, i)}
+                                    className="cursor-pointer text-[#78080B] hover:text-red-800 font-semibold flex items-center gap-1 text-sm"
                                   >
-                                    {g}
+                                    <Trash2 className="w-4 h-4" /> Remove
                                   </button>
-                                ))}
+                                )}
                               </div>
-                            </div>
 
-                            {/* Conditional Fields – Adults */}
-                            {key === "Adults" && (
-                              <>
-                                {/* Row 1: DOB + Contact */}
-                                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
-                                  <div className="flex flex-col gap-1">
-                                    <label className="text-xs text-slate-500">Date of Birth</label>
-                                    <input
-                                      type="date"
-                                      value={t.dob}
-                                      onChange={(e) =>
-                                        updateTraveller(key, i, "dob", e.target.value)
-                                      }
-                                      className={`border rounded px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 ${showValidationErrors && !t.dob
-                                          ? "border-red-500 bg-red-50/20"
-                                          : "border-slate-300"
-                                        }`}
-                                    />
-                                    {showValidationErrors && !t.dob && (
-                                      <span className="text-[11px] text-red-600 font-medium">Date of Birth is required</span>
-                                    )}
-                                  </div>
-                                  <div className="flex flex-col gap-1">
-                                    <label className="text-xs text-slate-500">Mobile Number</label>
-                                    <input
-                                      type="tel"
-                                      placeholder="Mobile Number"
-                                      value={t.mobile}
-                                      onChange={(e) =>
-                                        updateTraveller(key, i, "mobile", e.target.value)
-                                      }
-                                      className={`border rounded px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 ${showValidationErrors && !t.mobile?.trim()
-                                          ? "border-red-500 bg-red-50/20"
-                                          : "border-slate-300"
-                                        }`}
-                                    />
-                                    {showValidationErrors && !t.mobile?.trim() && (
-                                      <span className="text-[11px] text-red-600 font-medium">Mobile Number is required</span>
-                                    )}
-                                  </div>
-                                  <div className="flex flex-col gap-1">
-                                    <label className="text-xs text-slate-500">Email Address</label>
-                                    <input
-                                      type="email"
-                                      placeholder="Email Address"
-                                      value={t.email}
-                                      onChange={(e) =>
-                                        updateTraveller(key, i, "email", e.target.value)
-                                      }
-                                      className={`border rounded px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 ${showValidationErrors && !t.email?.trim()
-                                          ? "border-red-500 bg-red-50/20"
-                                          : "border-slate-300"
-                                        }`}
-                                    />
-                                    {showValidationErrors && !t.email?.trim() && (
-                                      <span className="text-[11px] text-red-600 font-medium">Email Address is required</span>
-                                    )}
-                                  </div>
+                              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+                                <div className="flex flex-col gap-1">
+                                  {(() => {
+                                    const firstNameError = getTravellerNameError(t.firstName, "First & Middle Name");
+                                    const hasFirstNameErr = showValidationErrors && Boolean(firstNameError);
+                                    return (
+                                      <>
+                                        <input
+                                          type="text"
+                                          placeholder="First & Middle Name"
+                                          value={t.firstName}
+                                          autoComplete="off"
+                                          spellCheck={false}
+                                          onChange={(e) =>
+                                            handleNameChange(
+                                              key,
+                                              i,
+                                              "firstName",
+                                              e.target.value,
+                                            )
+                                          }
+                                          className={`border rounded px-3 py-2 text-sm outline-none focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 ${hasFirstNameErr
+                                            ? "border-red-500 bg-red-50/20"
+                                            : "border-slate-300"
+                                            }`}
+                                        />
+                                        {hasFirstNameErr && (
+                                          <span className="text-[11px] text-red-600 font-medium">{firstNameError}</span>
+                                        )}
+                                      </>
+                                    );
+                                  })()}
+                                </div>
+                                <div className="flex flex-col gap-1">
+                                  {(() => {
+                                    const lastNameError = getTravellerNameError(t.lastName, "Last Name");
+                                    const hasLastNameErr = showValidationErrors && Boolean(lastNameError);
+                                    return (
+                                      <>
+                                        <input
+                                          type="text"
+                                          placeholder="Last Name"
+                                          value={t.lastName}
+                                          autoComplete="off"
+                                          spellCheck={false}
+                                          onChange={(e) =>
+                                            handleNameChange(
+                                              key,
+                                              i,
+                                              "lastName",
+                                              e.target.value,
+                                            )
+                                          }
+                                          className={`border rounded px-3 py-2 text-sm outline-none focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 ${hasLastNameErr
+                                            ? "border-red-500 bg-red-50/20"
+                                            : "border-slate-300"
+                                            }`}
+                                        />
+                                        {hasLastNameErr && (
+                                          <span className="text-[11px] text-red-600 font-medium">{lastNameError}</span>
+                                        )}
+                                      </>
+                                    );
+                                  })()}
                                 </div>
 
-                                {/* Row 2: Passport Details (International Only) */}
-                                {isIntl && (
-                                  <div className="mb-3">
-                                    <p className="text-xs font-semibold text-slate-600 mb-2 uppercase tracking-wide">Passport Details</p>
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                {/* Gender */}
+                                <div className="grid grid-cols-2 gap-2 h-[38px]">
+                                  {["MALE", "FEMALE"].map((g) => (
+                                    <button
+                                      key={g}
+                                      type="button"
+                                      onClick={() =>
+                                        updateTraveller(key, i, "gender", g)
+                                      }
+                                      className={`w-full h-full flex items-center justify-center rounded border text-sm font-semibold transition-colors ${t.gender === g
+                                        ? "bg-[#78080B] text-white border-[#78080B]"
+                                        : "bg-white text-slate-700 border-slate-300 hover:border-[#78080B]"
+                                        }`}
+                                    >
+                                      {g}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+
+                              {/* Conditional Fields – Adults */}
+                              {key === "Adults" && isAdultDobRequired && (
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+                                  <div className="flex flex-col gap-1">
+                                    <label className="text-xs text-slate-500">
+                                      Date of Birth <span className="text-red-500">*</span>
+                                    </label>
+                                    {(() => {
+                                      const adultDobError = getAdultDobError(t.dob);
+                                      const showAdultDobError = (t.dob && adultDobError) || (showValidationErrors && adultDobError);
+                                      return (
+                                        <>
+                                          <CustomDatePicker
+                                            placeholder="DD/MM/YYYY"
+                                            value={t.dob}
+                                            disabledDate={disabledAdultDate}
+                                            onChange={(val) => updateTraveller(key, i, "dob", val)}
+                                            hasError={Boolean(showAdultDobError)}
+                                          />
+                                          {showAdultDobError && (
+                                            <span className="text-[11px] text-red-600 font-medium">{adultDobError}</span>
+                                          )}
+                                        </>
+                                      );
+                                    })()}
+                                  </div>
+                                </div>
+                              )}
+
+                              {key === "Childs" && isChildDobRequired && (() => {
+                                const childDobError = getChildDobError(t.dob);
+                                const showChildDobError = (t.dob && childDobError) || (showValidationErrors && childDobError);
+                                return (
+                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+                                    <div className="flex flex-col gap-1">
+                                      <label className="text-xs text-slate-500">
+                                        Date of Birth <span className="text-red-500">*</span> <span className="text-[11px] text-slate-400 font-normal">(2y - 12y on travel date)</span>
+                                      </label>
+                                      <CustomDatePicker
+                                        placeholder="DD/MM/YYYY"
+                                        value={t.dob}
+                                        disabledDate={disabledChildDate}
+                                        onChange={(val) => updateTraveller(key, i, "dob", val)}
+                                        hasError={Boolean(showChildDobError)}
+                                      />
+                                      {showChildDobError && (
+                                        <span className="text-[11px] text-red-600 font-medium">{childDobError}</span>
+                                      )}
+                                    </div>
+                                  </div>
+                                );
+                              })()}
+
+                              {key === "Infants" && (() => {
+                                const infantDobError = getInfantDobError(t.dob);
+                                const showInfantDobError = (t.dob && infantDobError) || (showValidationErrors && infantDobError);
+                                return (
+                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+                                    {isInfantDobRequired && (
                                       <div className="flex flex-col gap-1">
-                                        <label className="text-xs text-slate-500">Passport Number</label>
+                                        <label className="text-xs text-slate-500">
+                                          Date of Birth <span className="text-red-500">*</span> <span className="text-[11px] text-slate-400 font-normal">(below 2y on travel date)</span>
+                                        </label>
+                                        <CustomDatePicker
+                                          placeholder="DD/MM/YYYY"
+                                          value={t.dob}
+                                          disabledDate={disabledInfantDate}
+                                          onChange={(val) => updateTraveller(key, i, "dob", val)}
+                                          hasError={Boolean(showInfantDobError)}
+                                        />
+                                        {showInfantDobError && (
+                                          <span className="text-[11px] text-red-600 font-medium">{infantDobError}</span>
+                                        )}
+                                      </div>
+                                    )}
+                                    <div className="flex flex-col gap-1">
+                                      <label className="text-xs text-slate-500">
+                                        Accompanying Adult Name <span className="text-red-500">*</span>
+                                      </label>
+                                      {(() => {
+                                        const accError = getTravellerNameError(t.accompanyingAdult, "Accompanying Adult Name");
+                                        const hasAccErr = showValidationErrors && Boolean(accError);
+                                        return (
+                                          <>
+                                            <input
+                                              type="text"
+                                              placeholder="Accompanying Adult Name"
+                                              value={t.accompanyingAdult}
+                                              autoComplete="off"
+                                              spellCheck={false}
+                                              onChange={(e) =>
+                                                handleNameChange(
+                                                  key,
+                                                  i,
+                                                  "accompanyingAdult",
+                                                  e.target.value,
+                                                )
+                                              }
+                                              className={`border rounded px-3 py-2 text-sm outline-none focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 ${hasAccErr
+                                                ? "border-red-500 bg-red-50/20"
+                                                : "border-slate-300"
+                                                }`}
+                                            />
+                                            {hasAccErr && (
+                                              <span className="text-[11px] text-red-600 font-medium">{accError}</span>
+                                            )}
+                                          </>
+                                        );
+                                      })()}
+                                    </div>
+                                  </div>
+                                );
+                              })()}
+
+                              {/* Passport Details (All Passenger Types: Adults, Childs, Infants) */}
+                              {isPassportSectionVisible && (() => {
+                                const hasAnyPassportField = Boolean(
+                                  t.passportNumber?.trim() ||
+                                  t.passportNationality?.trim() ||
+                                  t.passportIssued ||
+                                  t.passportExpiry
+                                );
+                                const isMandatoryForTraveller = isPassportRequired || hasAnyPassportField;
+
+                                const passportNumberError = isMandatoryForTraveller && !t.passportNumber?.trim()
+                                  ? "Passport Number is required"
+                                  : null;
+                                const nationalityError = isMandatoryForTraveller && !t.passportNationality?.trim()
+                                  ? "Nationality is required"
+                                  : null;
+                                const issueDateError = showPassportIssueDate && isMandatoryForTraveller && !t.passportIssued
+                                  ? "Passport Issue Date is required"
+                                  : null;
+                                const expiryDateError = showPassportExpiryDate && isMandatoryForTraveller && !t.passportExpiry
+                                  ? "Passport Expiry Date is required"
+                                  : null;
+
+                                return (
+                                  <div className="mb-3 pt-2">
+                                    <p className="text-xs font-semibold text-slate-600 mb-2 uppercase tracking-wide">
+                                      Passport Details{" "}
+                                      {isPassportRequired ? (
+                                        <span className="text-red-500">*</span>
+                                      ) : (
+                                        <span className="text-slate-400 font-normal lowercase">(optional)</span>
+                                      )}
+                                    </p>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                      {/* Passport Number */}
+                                      <div className="flex flex-col gap-1">
+                                        <label className="text-xs text-slate-500">
+                                          Passport Number {isPassportRequired && <span className="text-red-500">*</span>}
+                                        </label>
                                         <input
                                           type="text"
                                           placeholder="Passport Number"
-                                          value={t.passportNumber}
+                                          value={t.passportNumber || ""}
                                           onChange={(e) =>
                                             updateTraveller(key, i, "passportNumber", e.target.value.toUpperCase())
                                           }
-                                          className={`border rounded px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 uppercase ${showValidationErrors && !t.passportNumber?.trim()
+                                          className={`border rounded px-3 py-2 text-sm outline-none focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 uppercase ${
+                                            showValidationErrors && Boolean(passportNumberError)
                                               ? "border-red-500 bg-red-50/20"
                                               : "border-slate-300"
-                                            }`}
+                                          }`}
                                         />
-                                        {showValidationErrors && !t.passportNumber?.trim() && (
-                                          <span className="text-[11px] text-red-600 font-medium">Passport Number is required</span>
+                                        {showValidationErrors && passportNumberError && (
+                                          <span className="text-[11px] text-red-600 font-medium">{passportNumberError}</span>
                                         )}
                                       </div>
+
+                                      {/* Nationality */}
                                       <div className="flex flex-col gap-1">
-                                        <label className="text-xs text-slate-500">Nationality (e.g. IN)</label>
-                                        <input
-                                          type="text"
-                                          placeholder="Nationality (e.g. IN)"
-                                          maxLength={2}
-                                          value={t.passportNationality}
-                                          onChange={(e) =>
-                                            updateTraveller(key, i, "passportNationality", e.target.value.toUpperCase())
+                                        <label className="text-xs text-slate-500">
+                                          Nationality {isPassportRequired && <span className="text-red-500">*</span>}
+                                        </label>
+                                        <Select
+                                          options={nationalityOptions}
+                                          placeholder="Select Nationality..."
+                                          isSearchable
+                                          value={
+                                            nationalityOptions.find(
+                                              (opt) => opt.value === t.passportNationality?.toUpperCase()
+                                            ) || (t.passportNationality ? { value: t.passportNationality, label: t.passportNationality } : null)
                                           }
-                                          className={`border rounded px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 uppercase ${showValidationErrors && !t.passportNationality?.trim()
-                                              ? "border-red-500 bg-red-50/20"
-                                              : "border-slate-300"
-                                            }`}
+                                          onChange={(selected) =>
+                                            updateTraveller(key, i, "passportNationality", selected ? selected.value : "")
+                                          }
+                                          classNamePrefix="nationality-select"
+                                          menuPlacement="auto"
+                                          styles={{
+                                            control: (base, state) => ({
+                                              ...base,
+                                              borderColor: showValidationErrors && Boolean(nationalityError)
+                                                ? "#ef4444"
+                                                : state.isFocused
+                                                  ? "#3b82f6"
+                                                  : "#cbd5e1",
+                                              backgroundColor: showValidationErrors && Boolean(nationalityError)
+                                                ? "rgba(254, 242, 242, 0.2)"
+                                                : "white",
+                                              boxShadow: state.isFocused
+                                                ? "0 0 0 2px rgba(59, 130, 246, 0.2)"
+                                                : "none",
+                                              minHeight: "38px",
+                                              height: "38px",
+                                              fontSize: "0.875rem",
+                                              borderRadius: "0.375rem",
+                                              "&:hover": {
+                                                borderColor: showValidationErrors && Boolean(nationalityError)
+                                                  ? "#ef4444"
+                                                  : "#3b82f6",
+                                              },
+                                            }),
+                                            valueContainer: (base) => ({
+                                              ...base,
+                                              padding: "0 8px",
+                                            }),
+                                            placeholder: (base) => ({
+                                              ...base,
+                                              color: "#94a3b8",
+                                              fontSize: "0.875rem",
+                                            }),
+                                            menu: (base) => ({
+                                              ...base,
+                                              zIndex: 50,
+                                            }),
+                                          }}
                                         />
-                                        {showValidationErrors && !t.passportNationality?.trim() && (
-                                          <span className="text-[11px] text-red-600 font-medium">Nationality is required</span>
+                                        {showValidationErrors && nationalityError && (
+                                          <span className="text-[11px] text-red-600 font-medium">{nationalityError}</span>
                                         )}
                                       </div>
-                                      <div className="flex flex-col gap-1">
-                                        <label className="text-xs text-slate-500">Passport Issue Date</label>
-                                        <input
-                                          type="date"
-                                          value={t.passportIssued}
-                                          onChange={(e) =>
-                                            updateTraveller(key, i, "passportIssued", e.target.value)
-                                          }
-                                          className={`border rounded px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 ${showValidationErrors && !t.passportIssued
-                                              ? "border-red-500 bg-red-50/20"
-                                              : "border-slate-300"
-                                            }`}
-                                        />
-                                        {showValidationErrors && !t.passportIssued && (
-                                          <span className="text-[11px] text-red-600 font-medium">Passport Issue Date is required</span>
-                                        )}
-                                      </div>
-                                      <div className="flex flex-col gap-1">
-                                        <label className="text-xs text-slate-500">Passport Expiry Date</label>
-                                        <input
-                                          type="date"
-                                          value={t.passportExpiry}
-                                          onChange={(e) =>
-                                            updateTraveller(key, i, "passportExpiry", e.target.value)
-                                          }
-                                          className={`border rounded px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 ${showValidationErrors && !t.passportExpiry
-                                              ? "border-red-500 bg-red-50/20"
-                                              : "border-slate-300"
-                                            }`}
-                                        />
-                                        {showValidationErrors && !t.passportExpiry && (
-                                          <span className="text-[11px] text-red-600 font-medium">Passport Expiry Date is required</span>
-                                        )}
-                                      </div>
+
+                                      {/* Passport Issue Date */}
+                                      {showPassportIssueDate && (
+                                        <div className="flex flex-col gap-1">
+                                          <label className="text-xs text-slate-500">
+                                            Passport Issue Date {isPassportRequired && <span className="text-red-500">*</span>}
+                                          </label>
+                                          <CustomDatePicker
+                                            placeholder="DD/MM/YYYY"
+                                            value={t.passportIssued}
+                                            disabledDate={(curr) => curr && curr.isAfter(dayjs(), "day")}
+                                            onChange={(val) => updateTraveller(key, i, "passportIssued", val)}
+                                            hasError={Boolean(showValidationErrors && issueDateError)}
+                                          />
+                                          {showValidationErrors && issueDateError && (
+                                            <span className="text-[11px] text-red-600 font-medium">{issueDateError}</span>
+                                          )}
+                                        </div>
+                                      )}
+
+                                      {/* Passport Expiry Date */}
+                                      {showPassportExpiryDate && (
+                                        <div className="flex flex-col gap-1">
+                                          <label className="text-xs text-slate-500">
+                                            Passport Expiry Date {isPassportRequired && <span className="text-red-500">*</span>}
+                                          </label>
+                                          <CustomDatePicker
+                                            placeholder="DD/MM/YYYY"
+                                            value={t.passportExpiry}
+                                            disabledDate={(curr) => curr && curr.isBefore(travelDate, "day")}
+                                            onChange={(val) => updateTraveller(key, i, "passportExpiry", val)}
+                                            hasError={Boolean(showValidationErrors && expiryDateError)}
+                                          />
+                                          {showValidationErrors && expiryDateError && (
+                                            <span className="text-[11px] text-red-600 font-medium">{expiryDateError}</span>
+                                          )}
+                                        </div>
+                                      )}
                                     </div>
                                   </div>
-                                )}
-                              </>
-                            )}
+                                );
+                              })()}
 
-                            {(key === "Childs" || key === "Infants") && (
-                              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
-                                <div className="flex flex-col gap-1">
-                                  <label className="text-xs text-slate-500">Date of Birth</label>
-                                  <input
-                                    type="date"
-                                    value={t.dob}
-                                    onChange={(e) =>
-                                      updateTraveller(
-                                        key,
-                                        i,
-                                        "dob",
-                                        e.target.value,
-                                      )
-                                    }
-                                    className={`border rounded px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 ${showValidationErrors && !t.dob
-                                        ? "border-red-500 bg-red-50/20"
-                                        : "border-slate-300"
-                                      }`}
-                                  />
-                                  {showValidationErrors && !t.dob && (
-                                    <span className="text-[11px] text-red-600 font-medium">Date of Birth is required</span>
+                              {/* Wheelchair (Adults only) */}
+                              {
+                                // key === "Adults" && (
+                                //   <div className="flex items-center gap-2 mb-3">
+                                //     <input
+                                //       type="checkbox"
+                                //       checked={t.wheelchair}
+                                //       onChange={(e) =>
+                                //         updateTraveller(
+                                //           key,
+                                //           i,
+                                //           "wheelchair",
+                                //           e.target.checked,
+                                //         )
+                                //       }
+                                //       className="cursor-pointer w-4 h-4"
+                                //     />
+                                //     <label className="text-sm text-slate-600">
+                                //       I require wheelchair (Optional)
+                                //     </label>
+                                //   </div>
+                                // )
+                              }
+
+                              {/* Extra Baggage Section per Traveller */}
+                              <div className="mt-3 pt-3 border-t border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-50 p-3 rounded-lg">
+                                <div className="flex flex-col gap-1 min-w-0">
+                                  <div className="flex items-center gap-2 text-xs font-semibold text-slate-700">
+                                    <Luggage className="w-4 h-4 text-[#78080B] shrink-0" />
+                                    <span>Extra Baggage</span>
+                                  </div>
+                                  {(!t.selectedBaggage || t.selectedBaggage.length === 0) ? (
+                                    <span className="text-xs text-slate-500 italic pl-6">No extra baggage selected</span>
+                                  ) : (
+                                    <div className="flex flex-wrap gap-1.5 pl-6 mt-1">
+                                      {t.selectedBaggage.map((bItem) => {
+                                        const itemId = `${bItem.tripIndex ?? 0}_${bItem.SSRKey || bItem.Code || bItem.Description}`;
+                                        const routeText = bItem.route || bItem.sectorLabel;
+                                        return (
+                                          <span
+                                            key={itemId}
+                                            className="inline-flex items-center gap-1.5 bg-white text-[#78080B] text-xs font-semibold px-2.5 py-1 rounded-md border border-red-200 shadow-2xs"
+                                          >
+                                            {bItem.Description || bItem.Code} {routeText ? `(${routeText})` : ''} (+₹{Number(bItem.Amount).toLocaleString('en-IN')})
+                                            <button
+                                              type="button"
+                                              onClick={() => handleRemoveSingleBaggage(key, i, itemId)}
+                                              className="text-slate-400 hover:text-red-700 ml-0.5 font-bold"
+                                              title="Remove item"
+                                            >
+                                              ✕
+                                            </button>
+                                          </span>
+                                        );
+                                      })}
+                                    </div>
                                   )}
                                 </div>
-                                {key === "Infants" && (
-                                  <div className="flex flex-col gap-1">
-                                    <label className="text-xs text-slate-500">Accompanying Adult Name</label>
-                                    <input
-                                      type="text"
-                                      placeholder="Accompanying Adult Name"
-                                      value={t.accompanyingAdult}
-                                      onChange={(e) =>
-                                        updateTraveller(
-                                          key,
-                                          i,
-                                          "accompanyingAdult",
-                                          e.target.value,
-                                        )
-                                      }
-                                      className={`border rounded px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 ${showValidationErrors && !t.accompanyingAdult?.trim()
-                                          ? "border-red-500 bg-red-50/20"
-                                          : "border-slate-300"
-                                        }`}
-                                    />
-                                    {showValidationErrors && !t.accompanyingAdult?.trim() && (
-                                      <span className="text-[11px] text-red-600 font-medium">Accompanying Adult Name is required</span>
-                                    )}
+
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenBaggageModal(key, i, label)}
+                                  className="cursor-pointer text-xs font-semibold text-[#78080B] hover:bg-red-100 flex items-center justify-center gap-1.5 bg-white px-3.5 py-2 rounded-lg border border-red-200 shadow-2xs transition shrink-0 self-start sm:self-auto"
+                                >
+                                  <Luggage className="w-4 h-4 text-[#78080B]" />
+                                  {t.selectedBaggage && t.selectedBaggage.length > 0 ? "Edit Baggage" : "+ Add Baggage"}
+                                </button>
+                              </div>
+
+                              {/* Extra Meal Section per Traveller */}
+                              <div className="mt-2 pt-3 border-t border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-50 p-3 rounded-lg">
+                                <div className="flex flex-col gap-1 min-w-0">
+                                  <div className="flex items-center gap-2 text-xs font-semibold text-slate-700">
+                                    <Utensils className="w-4 h-4 text-orange-600 shrink-0" />
+                                    <span>Extra Meal</span>
                                   </div>
-                                )}
-                              </div>
-                            )}
-
-                            {/* Wheelchair (Adults only) */}
-                            {key === "Adults" && (
-                              <div className="flex items-center gap-2 mb-3">
-                                <input
-                                  type="checkbox"
-                                  checked={t.wheelchair}
-                                  onChange={(e) =>
-                                    updateTraveller(
-                                      key,
-                                      i,
-                                      "wheelchair",
-                                      e.target.checked,
-                                    )
-                                  }
-                                  className="cursor-pointer w-4 h-4"
-                                />
-                                <label className="text-sm text-slate-600">
-                                  I require wheelchair (Optional)
-                                </label>
-                              </div>
-                            )}
-
-                            {/* Extra Baggage Section per Traveller */}
-                            <div className="mt-3 pt-3 border-t border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-50 p-3 rounded-lg">
-                              <div className="flex flex-col gap-1 min-w-0">
-                                <div className="flex items-center gap-2 text-xs font-semibold text-slate-700">
-                                  <Luggage className="w-4 h-4 text-[#78080B] shrink-0" />
-                                  <span>Extra Baggage</span>
-                                </div>
-                                {(!t.selectedBaggage || t.selectedBaggage.length === 0) ? (
-                                  <span className="text-xs text-slate-500 italic pl-6">No extra baggage selected</span>
-                                ) : (
-                                  <div className="flex flex-wrap gap-1.5 pl-6 mt-1">
-                                    {t.selectedBaggage.map((bItem) => {
-                                      const itemId = bItem.SSRKey || bItem.Code || bItem.Description;
-                                      return (
-                                        <span
-                                          key={itemId}
-                                          className="inline-flex items-center gap-1.5 bg-white text-[#78080B] text-xs font-semibold px-2.5 py-1 rounded-md border border-red-200 shadow-2xs"
-                                        >
-                                          {bItem.Description || bItem.Code} (+₹{Number(bItem.Amount).toLocaleString('en-IN')})
-                                          <button
-                                            type="button"
-                                            onClick={() => handleRemoveSingleBaggage(key, i, itemId)}
-                                            className="text-slate-400 hover:text-red-700 ml-0.5 font-bold"
-                                            title="Remove item"
+                                  {(!t.selectedMeals || t.selectedMeals.length === 0) ? (
+                                    <span className="text-xs text-slate-500 italic pl-6">No extra meal selected</span>
+                                  ) : (
+                                    <div className="flex flex-wrap gap-1.5 pl-6 mt-1">
+                                      {t.selectedMeals.map((mItem) => {
+                                        const itemId = `${mItem.segmentIndex ?? 0}_${mItem.SSRKey || mItem.Code || mItem.Description}`;
+                                        const segText = mItem.sectorLabel || mItem.Sector;
+                                        return (
+                                          <span
+                                            key={itemId}
+                                            className="inline-flex items-center gap-1.5 bg-white text-orange-700 text-xs font-semibold px-2.5 py-1 rounded-md border border-orange-200 shadow-2xs"
                                           >
-                                            ✕
-                                          </button>
-                                        </span>
-                                      );
-                                    })}
-                                  </div>
-                                )}
-                              </div>
-
-                              <button
-                                type="button"
-                                onClick={() => handleOpenBaggageModal(key, i, label)}
-                                className="cursor-pointer text-xs font-semibold text-[#78080B] hover:bg-red-100 flex items-center justify-center gap-1.5 bg-white px-3.5 py-2 rounded-lg border border-red-200 shadow-2xs transition shrink-0 self-start sm:self-auto"
-                              >
-                                <Luggage className="w-4 h-4 text-[#78080B]" />
-                                {t.selectedBaggage && t.selectedBaggage.length > 0 ? "Edit Baggage" : "+ Add Baggage"}
-                              </button>
-                            </div>
-
-                            {/* Extra Meal Section per Traveller */}
-                            <div className="mt-2 pt-3 border-t border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-50 p-3 rounded-lg">
-                              <div className="flex flex-col gap-1 min-w-0">
-                                <div className="flex items-center gap-2 text-xs font-semibold text-slate-700">
-                                  <Utensils className="w-4 h-4 text-orange-600 shrink-0" />
-                                  <span>Extra Meal</span>
-                                </div>
-                                {(!t.selectedMeals || t.selectedMeals.length === 0) ? (
-                                  <span className="text-xs text-slate-500 italic pl-6">No extra meal selected</span>
-                                ) : (
-                                  <div className="flex flex-wrap gap-1.5 pl-6 mt-1">
-                                    {t.selectedMeals.map((mItem) => {
-                                      const itemId = mItem.SSRKey || mItem.Code || mItem.Description;
-                                      return (
-                                        <span
-                                          key={itemId}
-                                          className="inline-flex items-center gap-1.5 bg-white text-orange-700 text-xs font-semibold px-2.5 py-1 rounded-md border border-orange-200 shadow-2xs"
-                                        >
-                                          {mItem.Description || mItem.Code} (+₹{Number(mItem.Amount).toLocaleString('en-IN')})
-                                          <button
-                                            type="button"
-                                            onClick={() => handleRemoveSingleMeal(key, i, itemId)}
-                                            className="text-slate-400 hover:text-orange-700 ml-0.5 font-bold"
-                                            title="Remove item"
-                                          >
-                                            ✕
-                                          </button>
-                                        </span>
-                                      );
-                                    })}
-                                  </div>
-                                )}
-                              </div>
-
-                              <button
-                                type="button"
-                                onClick={() => handleOpenMealModal(key, i, label)}
-                                className="cursor-pointer text-xs font-semibold text-[#78080B] hover:bg-red-100 flex items-center justify-center gap-1.5 bg-white px-3.5 py-2 rounded-lg border border-red-200 shadow-2xs transition shrink-0 self-start sm:self-auto"
-                              >
-                                <Utensils className="w-4 h-4 text-[#78080B]" />
-                                {t.selectedMeals && t.selectedMeals.length > 0 ? "Edit Meals" : "+ Add Meal"}
-                              </button>
-                            </div>
-
-                            {/* Seat Section per Traveller (Adults + Childs only) */}
-                            {key !== "Infants" && (() => {
-                              // Build ordered pax list same as booking logic
-                              const allPax = [
-                                ...travellers.Adults.map((p) => p),
-                                ...travellers.Childs.map((p) => p),
-                              ];
-                              const globalPaxIdx = allPax.indexOf(t);
-                              const seatsArr = selectedSeatData?.seats ? Array.from(selectedSeatData.seats) : [];
-                              const assignedSeat = seatsArr[globalPaxIdx] ?? null;
-                              const assignedSeatPrice = selectedSeatDetails[globalPaxIdx]?.price ?? 0;
-
-                              return (
-                                <div className="mt-2 pt-3 border-t border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-50 p-3 rounded-lg">
-                                  <div className="flex flex-col gap-1 min-w-0">
-                                    <div className="flex items-center gap-2 text-xs font-semibold text-slate-700">
-                                      <Plane className="w-4 h-4 text-blue-600 shrink-0" />
-                                      <span>Seat</span>
+                                            {mItem.Description || mItem.Code} {segText ? `(${segText})` : ''} (+₹{Number(mItem.Amount).toLocaleString('en-IN')})
+                                            <button
+                                              type="button"
+                                              onClick={() => handleRemoveSingleMeal(key, i, itemId)}
+                                              className="text-slate-400 hover:text-orange-700 ml-0.5 font-bold"
+                                              title="Remove item"
+                                            >
+                                              ✕
+                                            </button>
+                                          </span>
+                                        );
+                                      })}
                                     </div>
-                                    {assignedSeat ? (
-                                      <span className="inline-flex items-center gap-1 bg-white text-[#78080B] text-xs font-semibold px-2.5 py-1 rounded-md border border-red-200 shadow-2xs ml-6 mt-1 w-fit">
-                                        ✓ Seat {assignedSeat}{assignedSeatPrice > 0 ? ` (+₹${assignedSeatPrice.toLocaleString('en-IN')})` : ''}
-                                      </span>
-                                    ) : (
-                                      <span className="text-xs text-slate-500 italic pl-6">No seat selected</span>
-                                    )}
-                                  </div>
-                                  <button
-                                    type="button"
-                                    onClick={handleSelectSeatModal}
-                                    className="cursor-pointer text-xs font-semibold text-blue-600 hover:bg-blue-50 flex items-center justify-center gap-1.5 bg-white px-3.5 py-2 rounded-lg border border-blue-200 shadow-2xs transition shrink-0 self-start sm:self-auto"
-                                  >
-                                    <Plane className="w-4 h-4 text-blue-500" />
-                                    {assignedSeat ? "Change Seat" : "Select Seat"}
-                                  </button>
+                                  )}
                                 </div>
-                              );
-                            })()}
-                          </div>
-                        ))}
 
-                        {/* Add Button */}
-                        <div className="flex flex-col gap-1">
-                          {travellers[key].length < limit && (
-                            <button
-                              onClick={() => addTraveller(key, limit)}
-                              className="cursor-pointer uppercase text-blue-600 text-sm font-medium hover:text-blue-700 text-left"
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenMealModal(key, i, label)}
+                                  className="cursor-pointer text-xs font-semibold text-[#78080B] hover:bg-red-100 flex items-center justify-center gap-1.5 bg-white px-3.5 py-2 rounded-lg border border-red-200 shadow-2xs transition shrink-0 self-start sm:self-auto"
+                                >
+                                  <Utensils className="w-4 h-4 text-[#78080B]" />
+                                  {t.selectedMeals && t.selectedMeals.length > 0 ? "Edit Meals" : "+ Add Meal"}
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+
+                          {/* Add Button */}
+                          <div className="flex flex-col gap-1">
+                            {travellers[key].length < limit && (
+                              <button
+                                onClick={() => addTraveller(key, limit)}
+                                className="cursor-pointer uppercase text-blue-600 text-sm font-medium hover:text-blue-700 text-left"
+                              >
+                                + Add {label}
+                              </button>
+                            )}
+                            {showValidationErrors && travellers[key].length < limit && (
+                              <span className="text-xs text-red-600 font-medium">
+                                Please add all {limit} {label}(s)
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+
+                {/* Contact Details Card */}
+                <div
+                  id="contact-details"
+                  className="bg-white rounded-lg shadow-sm border border-slate-200 scroll-mt-6"
+                >
+                  <div className="p-5">
+                    <div className="flex items-center gap-2 mb-1">
+                      <Mail className="w-5 h-5 text-blue-600" />
+                      <h3 className="text-lg font-bold text-slate-800">Contact Details</h3>
+                    </div>
+                    <p className="text-xs text-slate-500 mb-4">
+                      Your booking confirmation and flight ticket will be sent to this mobile number and email address.
+                    </p>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {/* Mobile Number */}
+                      <div className="flex flex-col gap-1">
+                        <label className="text-xs font-semibold text-slate-700">
+                          Mobile Number <span className="text-red-500">*</span>
+                        </label>
+                        <div className="flex">
+                          <span className="inline-flex items-center px-3 rounded-l border border-r-0 border-slate-300 bg-slate-50 text-slate-600 text-sm font-semibold select-none">
+                            +91
+                          </span>
+                          <input
+                            type="tel"
+                            placeholder="Enter 10-digit mobile number"
+                            maxLength={10}
+                            value={contactDetails.mobile}
+                            onChange={(e) => {
+                              const val = e.target.value.replace(/\D/g, "").slice(0, 10);
+                              setContactDetails((prev) => {
+                                const next = { ...prev, mobile: val };
+                                bookingStore.set({ contactDetails: next });
+                                return next;
+                              });
+                            }}
+                            className={`border rounded-r px-3 py-2 text-sm outline-none focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 w-full ${showValidationErrors && (!contactDetails.mobile?.trim() || contactDetails.mobile.replace(/\D/g, "").length !== 10)
+                              ? "border-red-500 bg-red-50/20"
+                              : "border-slate-300"
+                              }`}
+                          />
+                        </div>
+                        {showValidationErrors && !contactDetails.mobile?.trim() && (
+                          <span className="text-[11px] text-red-600 font-medium">Mobile Number is required</span>
+                        )}
+                        {showValidationErrors && contactDetails.mobile?.trim() && contactDetails.mobile.replace(/\D/g, "").length !== 10 && (
+                          <span className="text-[11px] text-red-600 font-medium">Please enter a valid 10-digit mobile number</span>
+                        )}
+                      </div>
+
+                      {/* Email Address */}
+                      <div className="flex flex-col gap-1">
+                        <label className="text-xs font-semibold text-slate-700">
+                          Email Address <span className="text-red-500">*</span>
+                        </label>
+                        <input
+                          type="email"
+                          placeholder="Enter email address"
+                          value={contactDetails.email}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setContactDetails((prev) => {
+                              const next = { ...prev, email: val };
+                              bookingStore.set({ contactDetails: next });
+                              return next;
+                            });
+                          }}
+                          className={`border rounded px-3 py-2 text-sm outline-none focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 ${showValidationErrors && (!contactDetails.email?.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactDetails.email.trim()))
+                            ? "border-red-500 bg-red-50/20"
+                            : "border-slate-300"
+                            }`}
+                        />
+                        {showValidationErrors && !contactDetails.email?.trim() && (
+                          <span className="text-[11px] text-red-600 font-medium">Email Address is required</span>
+                        )}
+                        {showValidationErrors && contactDetails.email?.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactDetails.email.trim()) && (
+                          <span className="text-[11px] text-red-600 font-medium">Please enter a valid email address</span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Select Seat (Optional) Card */}
+                {isSeatAllowed && (
+                  <div id="seats-section" className="bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden scroll-mt-6">
+                    {/* Header */}
+                    <button
+                      type="button"
+                      onClick={() => setIsSeatSectionOpen((prev) => !prev)}
+                      className="w-full flex items-center justify-between px-5 py-3.5 bg-[#78080B] text-white hover:bg-[#66070a] transition-colors cursor-pointer text-left"
+                    >
+                      <div className="flex items-center gap-2">
+                        <Plane className="w-4 h-4 text-white" />
+                        <h3 className="text-base font-semibold text-white tracking-wide">
+                          Select Seat (Optional)
+                        </h3>
+                      </div>
+                      <ChevronDown
+                        className={`w-5 h-5 text-white transition-transform duration-200 ${isSeatSectionOpen ? "" : "-rotate-90"
+                          }`}
+                      />
+                    </button>
+
+                    {/* Content / Segments */}
+                    {isSeatSectionOpen && (
+                      <div className="p-5 divide-y divide-slate-100">
+                        {(allFlightSegments && allFlightSegments.length > 0
+                          ? allFlightSegments
+                          : [{
+                            AirlineDeparture: fareReviewData?.TripInfo?.[0]?.AirlineDeparture,
+                            AirlineArrival: fareReviewData?.TripInfo?.[0]?.AirlineArrival,
+                            DepartureDate: fareReviewData?.TripInfo?.[0]?.DepartureDate,
+                          }]
+                        ).map((seg, segIdx) => {
+                          const depDisplay = (() => {
+                            const code = seg?.AirlineDeparture?.code || seg?.DepartureAirportCode || "";
+                            const city = seg?.AirlineDeparture?.city || seg?.AirlineDeparture?.CityName || seg?.AirlineDeparture?.cityName || seg?.AirlineDeparture?.name || "";
+                            return formatAirportCityDisplay(city, code);
+                          })();
+
+                          const arrDisplay = (() => {
+                            const code = seg?.AirlineArrival?.code || seg?.ArrivalAirportCode || "";
+                            const city = seg?.AirlineArrival?.city || seg?.AirlineArrival?.CityName || seg?.AirlineArrival?.cityName || seg?.AirlineArrival?.name || "";
+                            return formatAirportCityDisplay(city, code);
+                          })();
+
+                          const rawDate = seg?.DepartureDate || fareReviewData?.TripInfo?.[seg?.tripIndex ?? 0]?.DepartureDate;
+                          const formattedDate = rawDate && dayjs(rawDate).isValid()
+                            ? `on ${dayjs(rawDate).format("MMM, DD")}`
+                            : rawDate ? `on ${rawDate}` : "";
+
+                          // Passenger list (Adults + Childs)
+                          const seatPaxList = [];
+                          for (let a = 0; a < Adults; a++) {
+                            seatPaxList.push({ paxTypeLabel: `ADULT-${a + 1}` });
+                          }
+                          for (let c = 0; c < Childs; c++) {
+                            seatPaxList.push({ paxTypeLabel: `CHILD-${c + 1}` });
+                          }
+
+                          // Filter seats belonging to this segment
+                          const segSeats = (selectedSeatDetails || []).filter((s) => {
+                            const sIdx = s.segmentIndex !== undefined ? Number(s.segmentIndex) : 0;
+                            return sIdx === segIdx;
+                          });
+
+                          let seatSummaryText = "";
+                          if (segSeats.length > 0) {
+                            const seatPairs = [];
+                            segSeats.forEach((seat, seatIdx) => {
+                              const seatNum = seat.number || seat.SeatNo || seat.SSR_TypeName || seat.code;
+                              const pIdx = seat.paxIndex !== undefined ? Number(seat.paxIndex) : seatIdx;
+                              const paxLabel = seat.paxLabel || seatPaxList[pIdx]?.paxTypeLabel || `PAX-${pIdx + 1}`;
+                              if (seatNum) {
+                                seatPairs.push(`${paxLabel}:${seatNum}`);
+                              }
+                            });
+                            seatSummaryText = seatPairs.join(", ");
+                          }
+
+                          const hasSeatsForSeg = segSeats.length > 0 && seatSummaryText.length > 0;
+
+                          return (
+                            <div
+                              key={segIdx}
+                              className={`flex flex-col md:flex-row md:items-center justify-between gap-4 ${segIdx > 0 ? "pt-4" : ""
+                                } ${segIdx < (allFlightSegments?.length || 1) - 1 ? "pb-4" : ""}`}
                             >
-                              + Add {label}
-                            </button>
-                          )}
-                          {showValidationErrors && travellers[key].length < limit && (
-                            <span className="text-xs text-red-600 font-medium">
-                              Please add all {limit} {label}(s)
-                            </span>
+                              {/* Left: Origin -> Destination & Date */}
+                              <div className="min-w-[180px] sm:min-w-[220px]">
+                                <div className="text-sm font-bold text-slate-800 tracking-tight">
+                                  {depDisplay}
+                                  {" → "}
+                                  {arrDisplay}
+                                </div>
+                                {formattedDate && (
+                                  <div className="text-xs text-slate-500 font-medium mt-0.5">
+                                    {formattedDate}
+                                  </div>
+                                )}
+                              </div>
+
+                              {/* Middle: Selected Seat List or 'No Seat Selected' */}
+                              <div className="flex-1 md:text-center text-left">
+                                {hasSeatsForSeg ? (
+                                  <span className="inline-flex items-center gap-1 bg-red-50 text-[#78080B] text-xs sm:text-sm font-semibold px-3 py-1 rounded-md border border-red-200 shadow-2xs break-all">
+                                    ✓ {seatSummaryText}
+                                  </span>
+                                ) : (
+                                  <span className="text-xs sm:text-sm text-slate-500 font-normal">
+                                    No Seat Selected
+                                  </span>
+                                )}
+                              </div>
+
+                              {/* Right: Action Button */}
+                              <div className="shrink-0 flex items-center md:justify-end">
+                                <button
+                                  type="button"
+                                  onClick={() => handleSelectSeatModal(segIdx)}
+                                  className="w-full sm:w-auto px-5 py-2 rounded-lg bg-[#78080B] hover:bg-[#5f0608] active:bg-[#4a0506] text-white text-xs sm:text-sm font-semibold transition-colors shadow-xs cursor-pointer text-center flex items-center justify-center gap-1.5"
+                                >
+                                  <Plane className="w-3.5 h-3.5 text-white" />
+                                  {hasSeatsForSeg ? "Modify your seat" : "Select your seat"}
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* GST Details Card */}
+                {isGstApplicable && (
+                  <div id="gst-details" className="bg-white rounded-lg shadow-sm border border-slate-200 p-5">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-8 h-8 rounded-lg bg-blue-50 flex items-center justify-center text-blue-600">
+                          <Building2 className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <h3 className="text-base font-bold text-slate-800">
+                              GST Details {isGstMandatory ? (
+                                <span className="text-red-600 text-sm font-semibold">(Mandatory)</span>
+                              ) : (
+                                <span className="text-slate-500 font-medium text-sm">(Optional)</span>
+                              )}
+                            </h3>
+                            {isGstMandatory && (
+                              <span className="bg-red-50 text-red-600 text-[11px] font-semibold px-2 py-0.5 rounded border border-red-200">
+                                Required
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-xs text-slate-500">Claim GST credit for business travel</p>
+                        </div>
+                      </div>
+                      {!isGstMandatory && (
+                        <label className="relative inline-flex items-center cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={useGst}
+                            onChange={(e) => {
+                              const checked = e.target.checked;
+                              setUseGst(checked);
+                              bookingStore.set({
+                                gstInfo: checked ? gstDetails : null,
+                              });
+                            }}
+                            className="sr-only peer"
+                          />
+                          <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#78080B]"></div>
+                        </label>
+                      )}
+                    </div>
+
+                    {(isGstMandatory || useGst) && (
+                      <div className="space-y-4 mt-4 pt-4 border-t border-slate-100 animate-in fade-in duration-200">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div className="flex flex-col gap-1">
+                            <label className="text-xs font-semibold text-slate-600 uppercase tracking-wide">
+                              GST Number {isGstMandatory && <span className="text-red-500">*</span>}
+                            </label>
+                            <input
+                              type="text"
+                              placeholder="Enter GST number"
+                              value={gstDetails.gstNumber}
+                              maxLength={15}
+                              onChange={(e) => {
+                                const val = e.target.value.toUpperCase();
+                                const updated = { ...gstDetails, gstNumber: val };
+                                setGstDetails(updated);
+                                bookingStore.set({ gstInfo: updated });
+                              }}
+                              className={`border rounded px-3 py-2 text-sm uppercase outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 ${showValidationErrors && (!gstDetails.gstNumber?.trim() || (isGstMandatory && gstDetails.gstNumber.trim().length !== 15))
+                                ? "border-red-500 bg-red-50/20"
+                                : "border-slate-300"
+                                }`}
+                            />
+                            {showValidationErrors && !gstDetails.gstNumber?.trim() && (
+                              <span className="text-[11px] text-red-600 font-medium">GST Number is required</span>
+                            )}
+                            {showValidationErrors && gstDetails.gstNumber?.trim() && gstDetails.gstNumber.trim().length !== 15 && (
+                              <span className="text-[11px] text-red-600 font-medium">GST Number must be 15 characters</span>
+                            )}
+                          </div>
+
+                          <div className="flex flex-col gap-1">
+                            <label className="text-xs font-semibold text-slate-600 uppercase tracking-wide">
+                              Company / Registered Name {isGstMandatory && <span className="text-red-500">*</span>}
+                            </label>
+                            <input
+                              type="text"
+                              placeholder="Enter registered company name"
+                              value={gstDetails.registeredName}
+                              onChange={(e) => {
+                                const updated = { ...gstDetails, registeredName: e.target.value };
+                                setGstDetails(updated);
+                                bookingStore.set({ gstInfo: updated });
+                              }}
+                              className={`border rounded px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 ${showValidationErrors && !gstDetails.registeredName?.trim()
+                                ? "border-red-500 bg-red-50/20"
+                                : "border-slate-300"
+                                }`}
+                            />
+                            {showValidationErrors && !gstDetails.registeredName?.trim() && (
+                              <span className="text-[11px] text-red-600 font-medium">Company name is required</span>
+                            )}
+                          </div>
+
+                          <div className="flex flex-col gap-1">
+                            <label className="text-xs font-semibold text-slate-600 uppercase tracking-wide">
+                              Registered Email {isGstMandatory && <span className="text-red-500">*</span>}
+                            </label>
+                            <input
+                              type="email"
+                              placeholder="Enter registered email address"
+                              value={gstDetails.email}
+                              onChange={(e) => {
+                                const updated = { ...gstDetails, email: e.target.value };
+                                setGstDetails(updated);
+                                bookingStore.set({ gstInfo: updated });
+                              }}
+                              className={`border rounded px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 ${showValidationErrors && ((isGstMandatory && !gstDetails.email?.trim()) || (gstDetails.email?.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(gstDetails.email.trim())))
+                                ? "border-red-500 bg-red-50/20"
+                                : "border-slate-300"
+                                }`}
+                            />
+                            {showValidationErrors && isGstMandatory && !gstDetails.email?.trim() && (
+                              <span className="text-[11px] text-red-600 font-medium">Registered email is required</span>
+                            )}
+                            {showValidationErrors && gstDetails.email?.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(gstDetails.email.trim()) && (
+                              <span className="text-[11px] text-red-600 font-medium">Please enter a valid email address</span>
+                            )}
+                          </div>
+
+                          <div className="flex flex-col gap-1">
+                            <label className="text-xs font-semibold text-slate-600 uppercase tracking-wide">
+                              Registered Mobile {isGstMandatory && <span className="text-red-500">*</span>}
+                            </label>
+                            <input
+                              type="tel"
+                              placeholder="Enter registered mobile number"
+                              value={gstDetails.mobile}
+                              maxLength={10}
+                              onChange={(e) => {
+                                const val = e.target.value.replace(/\D/g, "").slice(0, 10);
+                                const updated = { ...gstDetails, mobile: val };
+                                setGstDetails(updated);
+                                bookingStore.set({ gstInfo: updated });
+                              }}
+                              className={`border rounded px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 ${showValidationErrors && ((isGstMandatory && !gstDetails.mobile?.toString().trim()) || (gstDetails.mobile?.toString().trim() && gstDetails.mobile.toString().trim().length !== 10))
+                                ? "border-red-500 bg-red-50/20"
+                                : "border-slate-300"
+                                }`}
+                            />
+                            {showValidationErrors && isGstMandatory && !gstDetails.mobile?.toString().trim() && (
+                              <span className="text-[11px] text-red-600 font-medium">Registered mobile is required</span>
+                            )}
+                            {showValidationErrors && gstDetails.mobile?.toString().trim() && gstDetails.mobile.toString().trim().length !== 10 && (
+                              <span className="text-[11px] text-red-600 font-medium">Please enter a valid 10-digit mobile number</span>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="flex flex-col gap-1">
+                          <label className="text-xs font-semibold text-slate-600 uppercase tracking-wide">
+                            Registered Address {isGstMandatory && <span className="text-red-500">*</span>}
+                          </label>
+                          <textarea
+                            rows={2}
+                            placeholder="Enter registered address"
+                            value={gstDetails.address}
+                            onChange={(e) => {
+                              const updated = { ...gstDetails, address: e.target.value };
+                              setGstDetails(updated);
+                              bookingStore.set({ gstInfo: updated });
+                            }}
+                            className={`border rounded px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 resize-none ${showValidationErrors && isGstMandatory && !gstDetails.address?.trim()
+                              ? "border-red-500 bg-red-50/20"
+                              : "border-slate-300"
+                              }`}
+                          />
+                          {showValidationErrors && isGstMandatory && !gstDetails.address?.trim() && (
+                            <span className="text-[11px] text-red-600 font-medium">Registered address is required</span>
                           )}
                         </div>
                       </div>
-                    ))}
+                    )}
                   </div>
-                </div>
-
-                {/* State Info */}
-                <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-5">
-                  {/* Booking Details Section */}
-                  <p className="text-slate-800 mb-3 text-xs">
-                    <span className="font-semibold text-lg">Your State</span>
-                    (Required for GST purpose on your tax invoice. You can edit
-                    this anytime later in your profile section.)
-                  </p>
-
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-                    {/* Select State */}
-                    <div>
-                      <label className="block text-xs text-slate-600 mb-1">
-                        Select the State
-                      </label>
-                      <Select
-                        options={stateOptions}
-                        placeholder="Select state..."
-                        isSearchable
-                        classNamePrefix="state-select"
-                        menuPlacement="top"
-                        styles={{
-                          control: (base, state) => ({
-                            ...base,
-                            borderColor: state.isFocused
-                              ? "#3b82f6"
-                              : "#cbd5e1",
-                            boxShadow: state.isFocused
-                              ? "0 0 0 2px rgba(59, 130, 246, 0.2)"
-                              : "none",
-                            minHeight: "36px",
-                            fontSize: "0.875rem",
-                            "&:hover": { borderColor: "#3b82f6" },
-                          }),
-                          placeholder: (base) => ({
-                            ...base,
-                            color: "#94a3b8",
-                          }),
-                          menu: (base) => ({
-                            ...base,
-                            zIndex: 50,
-                          }),
-                        }}
-                      />
-                    </div>
-                  </div>
-
-                  {/* GST Details */}
-                  <div className="flex items-center gap-2 mb-3">
-                    <input
-                      type="checkbox"
-                      id="billing-details-checkbox"
-                      className="cursor-pointer w-4 h-4"
-                    />
-                    <label className="text-sm font-medium text-slate-800">
-                      Confirm and save billing details to your profile
-                    </label>
-                  </div>
-                </div>
-
+                )}
 
                 <div>
                   <button
@@ -2273,7 +3920,7 @@ export default function ReviewDetails() {
                       </>
                     ) : (
                       <>
-                        CONTINUE
+                        {isLoggedIn ? "Proceed to Booking" : "Login to Continue"}
                         <ChevronRight />
                       </>
                     )}
@@ -2285,154 +3932,249 @@ export default function ReviewDetails() {
               <div className="hidden lg:block order-2 lg:order-2 lg:col-span-1">
                 <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-4 static lg:sticky lg:top-24">
 
-                  <h2 className="text-xl font-bold mb-5">
+                  <h2 className="text-xl font-bold mb-4">
                     Fare Summary
                   </h2>
 
-                  {/* Base Fare */}
-                  <div className="mb-4">
-                    <div className="flex items-center justify-between">
-                      <span className="text-base font-semibold text-blue-700">
-                        Base fare
-                      </span>
-
-                      <span className="font-semibold text-slate-800">
-                        ₹ {baseFare.toLocaleString()}
-                      </span>
+                  {/* Multi-trip Onward/Return Column Header */}
+                  {isRoundTripReview && (
+                    <div className="grid grid-cols-12 gap-1 text-xs font-bold text-slate-500 pb-2 border-b border-slate-100 mb-1">
+                      <div className="col-span-5">&nbsp;</div>
+                      <div className="col-span-3 text-right text-slate-700 font-bold uppercase tracking-wider" title="Onward Fare">ONWARD</div>
+                      <div className="col-span-4 text-right text-slate-700 font-bold uppercase tracking-wider" title="Return Fare">RETURN</div>
                     </div>
+                  )}
+
+                  {/* Base Fare */}
+                  <div className="mb-3">
+                    {isRoundTripReview ? (
+                      <FareRow
+                        label="Base fare"
+                        onwardAmount={Math.ceil(onwardBaseFare + Math.ceil(onwardRoinetMarkup))}
+                        returnAmount={Math.ceil(returnBaseFare + Math.ceil(returnRoinetMarkup))}
+                        isRoundTrip={true}
+                        showIcon={false}
+                        isHeader={true}
+                        isBold={true}
+                      />
+                    ) : (
+                      <div className="flex items-center justify-between px-1 -mx-1 py-0.5 rounded transition-colors hover:bg-slate-100/70" title={`Base fare: ₹ ${Math.ceil(baseFare).toLocaleString("en-IN")}`}>
+                        <span className="text-base font-semibold text-blue-700">
+                          Base fare
+                        </span>
+                        <span className="font-semibold text-slate-800 cursor-help" title={`₹ ${Math.ceil(baseFare).toLocaleString("en-IN")}`}>
+                          ₹ {Math.ceil(baseFare).toLocaleString("en-IN")}
+                        </span>
+                      </div>
+                    )}
                   </div>
 
                   {/* Taxes and Fees */}
-                  <div className="mb-4">
-                    <div className="flex items-center justify-between mb-3">
-                      <span className="text-base font-semibold text-blue-700">
-                        Taxes and fees
-                      </span>
-
-                      <span className="font-semibold text-slate-800">
-                        ₹ {taxes.toLocaleString()}
-                      </span>
-                    </div>
+                  <div className="mb-3">
+                    {isRoundTripReview ? (
+                      <FareRow
+                        label="Taxes and fees"
+                        onwardAmount={Math.ceil(onwardTaxesAndFee + Math.ceil(onwardCspMarkup) + onwardTxnFees)}
+                        returnAmount={Math.ceil(returnTaxesAndFee + Math.ceil(returnCspMarkup) + returnTxnFees)}
+                        isRoundTrip={true}
+                        showIcon={false}
+                        isHeader={true}
+                        isBold={true}
+                      />
+                    ) : (
+                      <div className="flex items-center justify-between mb-2 px-1 -mx-1 py-0.5 rounded transition-colors hover:bg-slate-100/70" title={`Taxes and fees: ₹ ${Math.ceil(taxes).toLocaleString("en-IN")}`}>
+                        <span className="text-base font-semibold text-blue-700">
+                          Taxes and fees
+                        </span>
+                        <span className="font-semibold text-slate-800 cursor-help" title={`₹ ${Math.ceil(taxes).toLocaleString("en-IN")}`}>
+                          ₹ {Math.ceil(taxes).toLocaleString("en-IN")}
+                        </span>
+                      </div>
+                    )}
 
                     {/* Tax Breakdown */}
-                    <div className="space-y-3 pl-1">
-                      {fuelSurcharge > 0 && (
+                    <div className="space-y-2 pl-1 pt-1">
+                      {/* Airline GST */}
+                      {(isRoundTripReview ? (onwardAirlineGst > 0 || returnAirlineGst > 0) : gst > 0) && (
                         <FareRow
-                          label="Fuel Surcharge (YQ)"
-                          amount={fuelSurcharge}
-                          showIcon={false}
-                        />
-                      )}
-
-                      {gst > 0 && (
-                        <FareRow
-                          label="GST"
+                          label="Airline GST"
                           amount={gst}
+                          onwardAmount={onwardAirlineGst}
+                          returnAmount={returnAirlineGst}
+                          isRoundTrip={isRoundTripReview}
                           showIcon={false}
                         />
                       )}
 
-                      {otherTaxes > 0 && (
-                        <FareRow
-                          label="Other Taxes"
-                          amount={otherTaxes}
-                          showIcon={false}
-                        />
-                      )}
-
-                      {managementFee > 0 && (
+                      {/* Management Fee */}
+                      {(isRoundTripReview ? (onwardManagementFee > 0 || returnManagementFee > 0) : managementFee > 0) && (
                         <FareRow
                           label="Management Fee"
                           amount={managementFee}
+                          onwardAmount={onwardManagementFee}
+                          returnAmount={returnManagementFee}
+                          isRoundTrip={isRoundTripReview}
+                          showIcon={false}
+                        />
+                      )}
+
+                      {/* Management Fee Tax */}
+                      {(isRoundTripReview ? (onwardManagementFeeTax > 0 || returnManagementFeeTax > 0) : managementFeeTax > 0) && (
+                        <FareRow
+                          label="Management Fee Tax"
+                          amount={managementFeeTax}
+                          onwardAmount={onwardManagementFeeTax}
+                          returnAmount={returnManagementFeeTax}
+                          isRoundTrip={isRoundTripReview}
+                          showIcon={false}
+                        />
+                      )}
+
+                      {/* Other Taxes */}
+                      {(isRoundTripReview ? (onwardOtherTaxes > 0 || returnOtherTaxes > 0) : otherTaxes > 0) && (
+                        <FareRow
+                          label="Other Taxes"
+                          amount={Math.ceil(otherTaxes + Math.ceil(retailerMarkup) + transactionFee)}
+                          onwardAmount={Math.ceil(onwardOtherTaxes + Math.ceil(onwardCspMarkup) + onwardTxnFees)}
+                          returnAmount={Math.ceil(returnOtherTaxes + Math.ceil(returnCspMarkup) + returnTxnFees)}
+                          isRoundTrip={isRoundTripReview}
+                          showIcon={false}
+                        />
+                      )}
+
+                      {/* Fuel Surcharge (YQ) */}
+                      {(isRoundTripReview ? (onwardYQ > 0 || returnYQ > 0) : fuelSurcharge > 0) && (
+                        <FareRow
+                          label="Fuel Surcharge (YQ)"
+                          amount={fuelSurcharge}
+                          onwardAmount={onwardYQ}
+                          returnAmount={returnYQ}
+                          isRoundTrip={isRoundTripReview}
+                          showIcon={false}
+                        />
+                      )}
+
+                      {/* Carrier Misc Fee (YR) */}
+                      {(isRoundTripReview ? (onwardYR > 0 || returnYR > 0) : carrierMiscFee > 0) && (
+                        <FareRow
+                          label="Carrier Misc Fee"
+                          amount={carrierMiscFee}
+                          onwardAmount={onwardYR}
+                          returnAmount={returnYR}
+                          isRoundTrip={isRoundTripReview}
                           showIcon={false}
                         />
                       )}
                     </div>
                   </div>
 
-                  {/* Extra Baggage Summary */}
-                  {totalBaggageCost > 0 && (
-                    <div className="mb-4 pb-4 border-b border-slate-100">
+                  {/* Sub Total */}
+                  <div className="py-2.5 border-t border-slate-100 mb-2">
+                    {isRoundTripReview ? (
                       <FareRow
-                        label={`Extra Baggage (${totalBaggageItemsCount} ${totalBaggageItemsCount === 1 ? 'item' : 'items'})`}
-                        amount={totalBaggageCost}
+                        label="Sub Total"
+                        onwardAmount={Math.ceil(onwardBaseFare + onwardTaxesAndFee + Math.ceil(onwardRoinetMarkup) + Math.ceil(onwardCspMarkup) + onwardTxnFees)}
+                        returnAmount={Math.ceil(returnBaseFare + returnTaxesAndFee + Math.ceil(returnRoinetMarkup) + Math.ceil(returnCspMarkup) + returnTxnFees)}
+                        isRoundTrip={true}
                         showIcon={false}
+                        isBold={true}
                       />
+                    ) : (
+                      <div className="flex items-center justify-between px-1 -mx-1 py-0.5 rounded transition-colors hover:bg-slate-100/70" title={`Sub Total: ₹ ${Math.ceil(subTotal).toLocaleString("en-IN")}`}>
+                        <span className="text-sm font-semibold text-slate-700">
+                          Sub Total
+                        </span>
+                        <span className="font-semibold text-slate-800 cursor-help" title={`₹ ${Math.ceil(subTotal).toLocaleString("en-IN")}`}>
+                          ₹ {Math.ceil(subTotal).toLocaleString("en-IN")}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Meal, Baggage & Seat */}
+                  {totalBaggageMealSeatAmount > 0 && (
+                    <div className="py-2.5 border-t border-slate-100 mb-2">
+                      <div className="flex items-center justify-between mb-2 px-1 -mx-1 py-0.5 rounded transition-colors hover:bg-slate-100/70" title={`Meal, Baggage & Seat: ₹ ${Math.ceil(totalBaggageMealSeatAmount).toLocaleString("en-IN")}`}>
+                        <span className="text-sm font-semibold text-slate-800">
+                          Meal, Baggage & Seat
+                        </span>
+                        <span className="font-semibold text-slate-800 cursor-help" title={`₹ ${Math.ceil(totalBaggageMealSeatAmount).toLocaleString("en-IN")}`}>
+                          ₹ {Math.ceil(totalBaggageMealSeatAmount).toLocaleString("en-IN")}
+                        </span>
+                      </div>
+                      <div className="space-y-1.5 pl-1">
+                        {totalBaggageCost > 0 && (
+                          <FareRow
+                            label={`Baggage (${totalBaggageItemsCount} ${totalBaggageItemsCount === 1 ? 'item' : 'items'})`}
+                            amount={totalBaggageCost}
+                            showIcon={false}
+                          />
+                        )}
+                        {totalMealCost > 0 && (
+                          <FareRow
+                            label={`Meal (${totalMealItemsCount} ${totalMealItemsCount === 1 ? 'item' : 'items'})`}
+                            amount={totalMealCost}
+                            showIcon={false}
+                          />
+                        )}
+                        {selectedSeatCost > 0 && (
+                          <FareRow
+                            label={`Seat (${selectedSeatData?.seats?.size ?? 0} seat${(selectedSeatData?.seats?.size ?? 0) !== 1 ? 's' : ''})`}
+                            amount={selectedSeatCost}
+                            showIcon={false}
+                          />
+                        )}
+                      </div>
                     </div>
                   )}
-
-                  {/* Extra Meals Summary */}
-                  {totalMealCost > 0 && (
-                    <div className="mb-4 pb-4 border-b border-slate-100">
-                      <FareRow
-                        label={`Extra Meals (${totalMealItemsCount} ${totalMealItemsCount === 1 ? 'item' : 'items'})`}
-                        amount={totalMealCost}
-                        showIcon={false}
-                      />
-                    </div>
-                  )}
-
-                  {/* Seat Charges Summary */}
-                  {selectedSeatCost > 0 && (
-                    <div className="mb-4 pb-4 border-b border-slate-100">
-                      <FareRow
-                        label={`Seat Charges (${selectedSeatData?.seats?.size ?? 0} seat${(selectedSeatData?.seats?.size ?? 0) !== 1 ? 's' : ''})`}
-                        amount={selectedSeatCost}
-                        showIcon={false}
-                      />
-                    </div>
-                  )}
-
 
                   {/* Amount to Pay */}
                   <div className="border-t border-slate-200 pt-4 mb-4">
-                    <div className="flex items-center justify-between">
+                    <div className="flex items-center justify-between px-1 -mx-1 py-0.5 rounded transition-colors hover:bg-slate-100/70" title={`Amount to Pay: ₹ ${Math.ceil(amountToPay).toLocaleString("en-IN")}`}>
                       <span className="text-base font-semibold text-blue-700">
                         Amount to Pay
                       </span>
 
-                      <span className="text-xl font-bold text-slate-800">
-                        ₹ {amountToPay.toLocaleString()}
+                      <span className="text-xl font-bold text-slate-800 cursor-help" title={`₹ ${Math.ceil(amountToPay).toLocaleString("en-IN")}`}>
+                        ₹ {Math.ceil(amountToPay).toLocaleString("en-IN")}
                       </span>
                     </div>
                   </div>
 
                   {/* Additional Pricing Details */}
                   <div className="space-y-3">
-
                     {/* Convenience Fee */}
-                    <div className="flex items-center justify-between">
+                    <div className="flex items-center justify-between px-1 -mx-1 py-0.5 rounded transition-colors hover:bg-slate-100/70" title={`Convenience Fee: ₹ ${Math.ceil(convenienceFee).toLocaleString("en-IN")}`}>
                       <span className="text-sm text-slate-700">
                         Convenience Fee
                       </span>
 
-                      <span className="text-sm font-medium text-slate-800">
-                        ₹ {convenienceFee.toLocaleString()}
+                      <span className="text-sm font-medium text-slate-800 cursor-help" title={`₹ ${Math.ceil(convenienceFee).toLocaleString("en-IN")}`}>
+                        ₹ {Math.ceil(convenienceFee).toLocaleString("en-IN")}
                       </span>
                     </div>
 
                     {/* Net Price */}
-                    <div className="flex items-center justify-between">
+                    <div className="flex items-center justify-between px-1 -mx-1 py-0.5 rounded transition-colors hover:bg-slate-100/70" title={`Net Price: ₹ ${Math.ceil(netPrice).toLocaleString("en-IN")}`}>
                       <span className="text-sm text-slate-700">
                         Net Price
                       </span>
 
-                      <span className="text-sm font-medium text-slate-800">
-                        ₹ {netPrice.toLocaleString()}
+                      <span className="text-sm font-medium text-slate-800 cursor-help" title={`₹ ${Math.ceil(netPrice).toLocaleString("en-IN")}`}>
+                        ₹ {Math.ceil(netPrice).toLocaleString("en-IN")}
                       </span>
                     </div>
 
                     {/* Commission */}
-                    <div className="flex items-center justify-between">
+                    <div className="flex items-center justify-between px-1 -mx-1 py-0.5 rounded transition-colors hover:bg-slate-100/70" title={`Commission: ₹ ${Math.ceil(commission).toLocaleString("en-IN")}`}>
                       <span className="text-sm text-slate-700">
                         Commission
                       </span>
 
-                      <span className="text-sm font-medium text-slate-800">
-                        ₹ {commission.toLocaleString()}
+                      <span className="text-sm font-medium text-slate-800 cursor-help" title={`₹ ${Math.ceil(commission).toLocaleString("en-IN")}`}>
+                        ₹ {Math.ceil(commission).toLocaleString("en-IN")}
                       </span>
                     </div>
-
                   </div>
 
                   {/* --- Coupon Applied --- */}
@@ -2510,7 +4252,7 @@ export default function ReviewDetails() {
                 </>
               ) : (
                 <>
-                  CONTINUE
+                  {isLoggedIn ? "Proceed to Booking" : "Login to Continue"}
                   <ChevronRight className="w-5 h-5" />
                 </>
               )}
@@ -2518,24 +4260,148 @@ export default function ReviewDetails() {
           </div>
         </div>
       </div>
+
+      {/* Login Modal — shown when user tries to book without being logged in */}
+      {isLoginModalOpen && (
+        <SignInModal
+          isOpen={isLoginModalOpen}
+          onClose={() => setIsLoginModalOpen(false)}
+          onSuccess={() => {
+            setIsLoginModalOpen(false);
+            // After login, show disclaimer modal 
+            setShowValidationErrors(true);
+            if (validateForm()) {
+              setIsDisclaimerModalOpen(true);
+            }
+          }}
+        />
+      )}
+
+      {/* Important Disclaimer & Payment Mode Modal */}
+      {isDisclaimerModalOpen && (
+        <ImportantDisclaimerModal
+          open={isDisclaimerModalOpen}
+          onClose={() => setIsDisclaimerModalOpen(false)}
+          onConfirmWallet={() => bookingMutation.mutate()}
+          amount={amountToPay}
+          isWalletBookingLoading={bookingMutation.isPending}
+          getBookingPayload={getBookingPayload}
+        />
+      )}
+
+      {/* Price Change Alert Modal (FAREALERT) */}
+      <FareAlertModal
+        open={isFareAlertModalOpen}
+        oldFare={fareAlert?.OldFare}
+        newFare={fareAlert?.NewFare}
+        onAccept={() => {
+          setHasUserAcceptedFareAlert(true);
+          setIsFareAlertModalOpen(false);
+        }}
+        onCancel={() => {
+          setIsFareAlertModalOpen(false);
+          const bookingData = bookingStore.get();
+          if (bookingData?.searchUrl) {
+            navigate(bookingData.searchUrl);
+            return;
+          }
+          if (bookingData?.searchParams) {
+            navigate(`/flight-results${bookingData.searchParams.startsWith("?") ? "" : "?"}${bookingData.searchParams}`);
+            return;
+          }
+
+          const flight = bookingData?.isRoundTrip ? (bookingData?.outboundFlight || bookingData?.flight) : bookingData?.flight;
+          const origin = flight?.AirlineDeparture?.code || flight?.DepartureAirportCode || flight?.Origin || "";
+          const destination = flight?.AirlineArrival?.code || flight?.ArrivalAirportCode || flight?.Destination || "";
+          const departDate = flight?.DepartureDate || "";
+          const returnFlight = bookingData?.returnFlight;
+          const returnDate = returnFlight?.DepartureDate || "";
+          const adults = bookingData?.travellers?.adults || 1;
+          const children = bookingData?.travellers?.children || 0;
+          const infants = bookingData?.travellers?.infants || 0;
+          const travelType = bookingData?.travelType || 0;
+
+          if (origin && destination) {
+            const params = new URLSearchParams({
+              origin,
+              destination,
+              departDate,
+              returnDate,
+              adults: String(adults),
+              children: String(children),
+              infants: String(infants),
+              travelType: String(travelType),
+            });
+            navigate(`/flight-results?${params.toString()}`);
+          } else {
+            navigate("/flight-results");
+          }
+        }}
+      />
     </>
   );
 }
 
-const FareRow = ({ label, amount, showIcon = true }) => (
-  <div className="flex items-center justify-between">
-    <div className="flex items-center gap-2">
-      {showIcon && (
-        <CirclePlus className="w-4 h-4 text-slate-400" />
-      )}
+const FareRow = ({
+  label,
+  amount = 0,
+  onwardAmount = 0,
+  returnAmount = 0,
+  isRoundTrip = false,
+  showIcon = true,
+  isBold = false,
+  isHeader = false,
+}) => {
+  const formattedAmount = `₹ ${Math.ceil(amount || 0).toLocaleString("en-IN")}`;
+  const formattedOnward = `₹${Math.ceil(onwardAmount || 0).toLocaleString("en-IN")}`;
+  const formattedReturn = `₹${Math.ceil(returnAmount || 0).toLocaleString("en-IN")}`;
 
-      <span className="text-sm text-slate-700">
-        {label}
+  if (isRoundTrip) {
+    return (
+      <div
+        className={`grid grid-cols-12 gap-1 items-center px-1 -mx-1 py-0.5 rounded transition-colors hover:bg-slate-100/70 group ${isHeader ? "font-semibold" : "text-xs sm:text-sm"}`}
+        title={`${label} — Onward: ${formattedOnward} | Return: ${formattedReturn}`}
+      >
+        <div className="col-span-5 flex items-center gap-1.5 min-w-0" title={label}>
+          {showIcon && <CirclePlus className="w-3.5 h-3.5 text-slate-400 shrink-0" />}
+          <span className={`truncate ${isHeader ? "text-blue-700 font-semibold text-sm" : "text-slate-600"}`}>
+            {label}
+          </span>
+        </div>
+        <div
+          className={`col-span-3 text-right truncate cursor-help ${isBold ? "font-bold text-slate-800" : "font-medium text-slate-700"}`}
+          title={`Onward: ${formattedOnward}`}
+        >
+          {formattedOnward}
+        </div>
+        <div
+          className={`col-span-4 text-right truncate cursor-help ${isBold ? "font-bold text-slate-800" : "font-medium text-slate-700"}`}
+          title={`Return: ${formattedReturn}`}
+        >
+          {formattedReturn}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="flex items-center justify-between px-1 -mx-1 py-0.5 rounded transition-colors hover:bg-slate-100/70"
+      title={`${label}: ${formattedAmount}`}
+    >
+      <div className="flex items-center gap-2 min-w-0" title={label}>
+        {showIcon && <CirclePlus className="w-4 h-4 text-slate-400 shrink-0" />}
+        <span className={`truncate text-xs sm:text-sm ${isHeader ? "text-blue-700 font-semibold" : "text-slate-600"}`}>
+          {label}
+        </span>
+      </div>
+
+      <span
+        className={`text-xs sm:text-sm cursor-help shrink-0 ml-2 ${isBold ? "font-bold text-slate-800" : "font-medium text-slate-700"}`}
+        title={formattedAmount}
+      >
+        {formattedAmount}
       </span>
     </div>
-
-    <span className="text-sm font-medium text-slate-800">
-      ₹ {amount.toLocaleString()}
-    </span>
-  </div>
-);
+  );
+};

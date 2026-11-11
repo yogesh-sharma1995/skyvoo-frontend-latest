@@ -1,15 +1,18 @@
 import React from "react";
-import { XCircle, CheckCircle2 } from "lucide-react";
+import { XCircle, CheckCircle2, Clock, AlertTriangle } from "lucide-react";
 
 /**
- * Reusable error/success modal.
+ * Reusable error/success/warning modal.
  *
  * Props:
  *  - open        {boolean}  — controls visibility
  *  - onClose     {function} — called when user dismisses
  *  - title       {string}   — heading text  (default: "Something went wrong")
  *  - message     {string}   — full error/success body
- *  - type        {string}   — "error" | "success" (default: "error")
+ *  - type        {string}   — "error" | "success" | "warning" | "pending" (default: "error")
+ *  - buttonText  {string}   — primary button text
+ *  - onAction    {function} — optional secondary action handler
+ *  - actionText  {string}   — optional secondary action text
  */
 const ErrorModal = ({
   open,
@@ -17,10 +20,15 @@ const ErrorModal = ({
   title = "Something went wrong",
   message = "An unexpected error occurred. Please try again.",
   type = "error",
+  buttonText,
+  onAction,
+  actionText,
 }) => {
   if (!open) return null;
 
-  const isError = type === "error";
+  const isSuccess = type === "success";
+  const isWarning = type === "warning" || type === "pending";
+  const isError = !isSuccess && !isWarning;
 
   return (
     <div
@@ -44,13 +52,17 @@ const ErrorModal = ({
           {/* Icon + title + close */}
           <div className="flex items-start justify-between gap-3 mb-4">
             <div className="flex items-center gap-3">
-              {isError ? (
-                <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center shrink-0">
-                  <XCircle className="w-5 h-5 text-[#78080B]" />
-                </div>
-              ) : (
+              {isSuccess ? (
                 <div className="w-10 h-10 rounded-full bg-green-100 flex items-center justify-center shrink-0">
                   <CheckCircle2 className="w-5 h-5 text-green-600" />
+                </div>
+              ) : isWarning ? (
+                <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center shrink-0">
+                  <Clock className="w-5 h-5 text-amber-600" />
+                </div>
+              ) : (
+                <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center shrink-0">
+                  <XCircle className="w-5 h-5 text-[#78080B]" />
                 </div>
               )}
               <h2 className="text-base font-bold text-slate-800 leading-snug">
@@ -72,17 +84,29 @@ const ErrorModal = ({
             {message}
           </p>
 
-          {/* Dismiss button */}
-          <button
-            onClick={onClose}
-            className={`mt-5 w-full text-white font-semibold py-2.5 rounded-xl transition-all duration-200 cursor-pointer text-sm ${
-              isError
-                ? "bg-[#78080B] hover:bg-[#a01014]"
-                : "bg-green-600 hover:bg-green-700"
-            }`}
-          >
-            {isError ? "Dismiss" : "Ok"}
-          </button>
+          {/* Action buttons */}
+          <div className="mt-5 flex gap-2">
+            {onAction && actionText && (
+              <button
+                onClick={onAction}
+                className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold py-2.5 rounded-xl transition-all duration-200 cursor-pointer text-sm"
+              >
+                {actionText}
+              </button>
+            )}
+            <button
+              onClick={onClose}
+              className={`flex-1 text-white font-semibold py-2.5 rounded-xl transition-all duration-200 cursor-pointer text-sm ${
+                isSuccess
+                  ? "bg-green-600 hover:bg-green-700"
+                  : isWarning
+                  ? "bg-amber-600 hover:bg-amber-700"
+                  : "bg-[#78080B] hover:bg-[#a01014]"
+              }`}
+            >
+              {buttonText || (isError ? "Dismiss" : "Got it")}
+            </button>
+          </div>
         </div>
       </div>
     </div>

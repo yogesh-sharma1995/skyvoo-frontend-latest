@@ -39,7 +39,6 @@ function FlightSearchHeader() {
 
   const [tripType, setTripType] = useState("");
   const [fareType, setFareType] = useState('regular');
-  console.log(tripType, "--fetch trip type--")
 
   const [showTravellerBox, setShowTravellerBox] = useState(false);
 
@@ -79,50 +78,63 @@ function FlightSearchHeader() {
     const returnDateStr = searchParams.get("returnDate"); // MM/DD/YYYY or ""
     const adults = Number(searchParams.get("adults") || 1);
     const children = Number(searchParams.get("children") || 0);
-    const infants = Number(searchParams.get("infants") || 0);
+    const infantsRaw = Number(searchParams.get("infants") || 0);
+    const infants = Math.min(infantsRaw, adults);
     const cabinClass = Number(searchParams.get("cabinClass") || 0);
     const bookingType = Number(searchParams.get("bookingType") || 0);
 
-    // Trip type: bookingType 1 = round trip, 0 = one-way
-    setTripType(bookingType === 1 ? "ROUND_TRIP" : "ONE_WAY");
+    // If no origin or destination in URL, keep search fields open and empty so user can search directly
+    if (!originCode || !destinationCode) {
+      setIsEditable(true);
+    } else {
+      setIsEditable(false);
+    }
 
-    // if (returnDateStr) {
-    //   setTripType(1)
-    // }
+    // Trip type: bookingType 2 = special round trip, 1 = round trip, 0 = one-way
+    setTripType(bookingType === 2 ? "SPECIAL_ROUND_TRIP" : bookingType === 1 ? "ROUND_TRIP" : "ONE_WAY");
 
+    // Fare Type
+    const studentFare = searchParams.get("studentFareSearch") === "true";
+    const srCitizen = searchParams.get("srCitizenSearch") === "true";
+    if (studentFare) setFareType("student");
+    else if (srCitizen) setFareType("senior");
+    else setFareType("regular");
 
     // Travellers
     setTravellers({ adults, children, infants });
 
-    // Depart date
-    let departDate = new Date();
-    if (departDateStr) {
-      try {
-        const parsed = parse(departDateStr, "MM/dd/yyyy", new Date());
-        if (isValid(parsed)) departDate = parsed;
-      } catch (_) {
-        /* keep today */
+    const parseDateHelper = (str) => {
+      if (!str) return null;
+      for (const fmt of ["MM/dd/yyyy", "dd/MM/yyyy", "yyyy-MM-dd", "yyyy/MM/dd"]) {
+        try {
+          const p = parse(str, fmt, new Date());
+          if (isValid(p)) return p;
+        } catch (_) { }
       }
-    }
+      try {
+        const d = new Date(str);
+        if (isValid(d) && !isNaN(d.getTime())) return d;
+      } catch (_) { }
+      return null;
+    };
+
+    // Depart date
+    const departDate = parseDateHelper(departDateStr) || new Date();
     setDepartSelected(departDate);
 
     // Return date
-    let returnDate = null;
-    if (returnDateStr) {
-      try {
-        const parsed = parse(returnDateStr, "MM/dd/yyyy", new Date());
-        if (isValid(parsed)) returnDate = parsed;
-      } catch (_) {
-        /* no return */
-      }
-    }
+    const returnDate = parseDateHelper(returnDateStr);
 
     setFlightSearchInfo((prev) => ({
       ...prev,
       coach: cabinClass,
       depart: departDate,
       return: returnDate,
+      from: null,
+      to: null,
     }));
+
+    if (!originCode && !destinationCode) return;
 
     // Fetch airport objects for origin & destination
     const resolveAirport = async (code) => {
@@ -145,8 +157,7 @@ function FlightSearchHeader() {
         to: toAirport,
       }));
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [searchParams]);
   // ─────────────────────────────────────────────────────────────────────────
 
   const {
@@ -169,12 +180,55 @@ function FlightSearchHeader() {
     enabled: debouncedTo?.trim().length >= 1,
   });
 
+  const toNumber = (v) => {
+    if (typeof v === "string" && v.startsWith(">")) {
+      const parsed = parseInt(v.slice(1), 10);
+      return Number.isNaN(parsed) ? 0 : parsed + 1;
+    }
+    const n = Number(v);
+    return Number.isNaN(n) ? 0 : n;
+  };
+
+  const getAdultCount = (val = travellers.adults) => toNumber(val) || 1;
+  const getChildCount = (val = travellers.children) => toNumber(val) || 0;
+  const getInfantCount = (val = travellers.infants) => toNumber(val) || 0;
+
+  const handleAdultsChange = (newAdults) => {
+    const newAdultNum = toNumber(newAdults);
+    setTravellers((prev) => {
+      const curInfantNum = toNumber(prev.infants);
+      let newInfants = prev.infants;
+      if (curInfantNum > newAdultNum) {
+        newInfants = newAdultNum <= 6 ? newAdultNum : ">6";
+      }
+      return {
+        ...prev,
+        adults: newAdults,
+        infants: newInfants,
+      };
+    });
+  };
+
+  const handleInfantsChange = (newInfants) => {
+    const adultNum = getAdultCount(travellers.adults);
+    const newInfantNum = toNumber(newInfants);
+
+    if (newInfantNum > adultNum) {
+      alert("Number of infants cannot exceed number of adults.");
+      return;
+    }
+
+    setTravellers((prev) => ({
+      ...prev,
+      infants: newInfants,
+    }));
+  };
+
   const validateTravellers = () => {
     // Interpret '>9' as 10, '>6' as 7 for validation and totals
-    setShowTravellerBox(!showTravellerBox);
-    const adultsVal = travellers.adults === ">9" ? 10 : travellers.adults;
-    const childrenVal = travellers.children === ">6" ? 7 : travellers.children;
-    const infantsVal = travellers.infants === ">6" ? 7 : travellers.infants;
+    const adultsVal = getAdultCount(travellers.adults);
+    const childrenVal = getChildCount(travellers.children);
+    const infantsVal = getInfantCount(travellers.infants);
 
     // 1️⃣ At least one adult
     if (adultsVal < 1) {
@@ -184,7 +238,11 @@ function FlightSearchHeader() {
 
     // 2️⃣ Infants cannot exceed adults
     if (infantsVal > adultsVal) {
-      alert("Infants cannot exceed the number of adults.");
+      alert("Number of infants cannot exceed number of adults.");
+      setTravellers((prev) => ({
+        ...prev,
+        infants: adultsVal <= 6 ? adultsVal : ">6",
+      }));
       return false;
     }
 
@@ -195,19 +253,20 @@ function FlightSearchHeader() {
       return false;
     }
 
+    setShowTravellerBox(false);
     return true;
   };
 
   const handleFlightInputChange = (field, value) => {
     setFlightSearchInfo((prev) => ({ ...prev, [field]: value }));
-    if (field == "return") {
+    if (field === "return") {
       if (value) {
-        setTripType("ROUND_TRIP")
+        setTripType((current) =>
+          current === "SPECIAL_ROUND_TRIP" ? "SPECIAL_ROUND_TRIP" : "ROUND_TRIP"
+        );
       } else {
-        setTripType("ONE_WAY")
-
+        setTripType("ONE_WAY");
       }
-
     }
   };
 
@@ -218,6 +277,7 @@ function FlightSearchHeader() {
     // Auto-close and adjust Return if needed
     if (flightSearchInfo.return && date > flightSearchInfo.return) {
       handleFlightInputChange("return", null);
+      setTripType("ONE_WAY");
     }
     setDepartOpen(false);
   };
@@ -227,23 +287,44 @@ function FlightSearchHeader() {
     setReturnOpen(false);
   };
 
-  const CustomOption = (props) => (
-    <components.Option {...props}>
-      <div className="flex justify-between w-full">
-        <div className="flex flex-col">
-          <span className="text-gray-900">
-            {props.data.city}, {props.data.country}
+  const CustomOption = (props) => {
+    const country = props.data.countryName || (props.data.countryCode === 'IND' || props.data.countryCode === 'IN' ? 'India' : props.data.countryCode || props.data.country || '');
+    return (
+      <components.Option {...props}>
+        <div className="flex items-center gap-3 w-full py-0.5 text-left">
+          <div className="w-13 h-11 min-w-[50px] bg-[#f0f2f5] border border-gray-200/90 rounded-xl flex items-center justify-center flex-shrink-0">
+            <span className="text-sm font-bold text-gray-800 tracking-wide">
+              {props.data.airportCode}
+            </span>
+          </div>
+          <div className="flex flex-col min-w-0 flex-1 justify-center">
+            <span className="text-[14px] sm:text-[15px] font-semibold text-gray-900 truncate leading-tight">
+              {props.data.city}{country ? `, ${country}` : ''}
+            </span>
+            <span className="text-xs text-gray-500 font-normal truncate mt-0.5" title={props.data.airportName}>
+              {props.data.airportName}
+            </span>
+          </div>
+        </div>
+      </components.Option>
+    );
+  };
+
+  const CustomSingleValue = (props) => {
+    if (props.selectProps.inputValue || props.isFocused || props.selectProps.menuIsOpen) return null;
+    return (
+      <components.SingleValue {...props}>
+        <div className="flex flex-col text-left leading-tight w-full overflow-hidden">
+          <span className="text-[14px] sm:text-[15px] font-semibold text-white truncate">
+            {props.data.city}
           </span>
-          <span className="text-gray-400 text-sm">
+          <span className="text-[11px] text-white/70 font-normal truncate mt-0.5" title={props.data.airportName}>
             {props.data.airportName}
           </span>
         </div>
-        <span className="font-medium text-gray-700">
-          {props.data.airportCode}
-        </span>
-      </div>
-    </components.Option>
-  );
+      </components.SingleValue>
+    );
+  };
 
   const handleSwap = () => {
     setRotation((prevRotation) => prevRotation + 180);
@@ -278,7 +359,7 @@ function FlightSearchHeader() {
       },
     ];
 
-    if (tripType === "ROUND_TRIP" && flightSearchInfo.return) {
+    if ((tripType === "ROUND_TRIP" || tripType === "SPECIAL_ROUND_TRIP") && flightSearchInfo.return) {
       tripInfo.push({
         Origin: flightSearchInfo.to.airportCode,
         Destination: flightSearchInfo.from.airportCode,
@@ -287,15 +368,17 @@ function FlightSearchHeader() {
       });
     }
 
+    const bookingTypeVal = tripType === "SPECIAL_ROUND_TRIP" ? 2 : tripType === "ROUND_TRIP" ? 1 : 0;
+
     return {
       TripInfo: tripInfo,
       TravelType: isInternational ? 1 : 0,
-      BookingType: tripType === "ROUND_TRIP" ? 1 : 0,
+      BookingType: bookingTypeVal,
       CabinClass: flightSearchInfo.coach,
-      AdultCount: travellers.adults,
-      ChildCount: travellers.children,
-      InfantCount: travellers.infants,
-      SrCitizenSearch: false,
+      AdultCount: toNumber(travellers.adults),
+      ChildCount: toNumber(travellers.children),
+      InfantCount: toNumber(travellers.infants),
+      SrCitizenSearch: fareType === "senior",
       StudentFareSearch: fareType === "student",
       Filtered_Airline: [{ Airline_Code: "" }],
     };
@@ -313,11 +396,19 @@ function FlightSearchHeader() {
 
     if (!depart) return alert('Please select a departure date');
 
-    if (tripType === 'ROUND_TRIP' && !flightSearchInfo.return) {
+    if ((tripType === 'ROUND_TRIP' || tripType === 'SPECIAL_ROUND_TRIP') && !flightSearchInfo.return) {
       return alert('Please select a return date for the round trip.');
     }
 
     if (!traveller) return alert('Please select travelers');
+
+    const adultsVal = getAdultCount(travellers.adults);
+    const infantsVal = getInfantCount(travellers.infants);
+    if (infantsVal > adultsVal) {
+      alert("Number of infants cannot exceed number of adults.");
+      return false;
+    }
+
     if (coach === null || coach === undefined) return alert('Please select a travel class');
 
     return true;
@@ -348,6 +439,7 @@ function FlightSearchHeader() {
       studentFareSearch: String(payload.StudentFareSearch),
     });
 
+    setIsEditable(false);
     navigate(`/flight-results?${params.toString()}`);
   };
 
@@ -401,7 +493,7 @@ function FlightSearchHeader() {
     } else {
       setFareTypeHeight(0);
     }
-  }, [isEditable]);
+  }, [isEditable, fareType]);
 
   useEffect(() => {
     const handleClickOutside = (e) => {
@@ -440,18 +532,24 @@ function FlightSearchHeader() {
       className="relative bg-[#78080B] text-white px-2 sm:px-4 py-3 sm:py-5 z-999 mb-4"
       style={{ boxShadow: "0px 4px 4px 0px rgba(0, 0, 0, 0.25)" }}
     >
-      <div className="max-w-6xl mx-auto flex items-center justify-between">
+      <div className="max-w-7xl mx-auto flex items-center justify-between sm:px-6 py-5">
         {/* Main Search Grid */}
-        <div className="w-full grid grid-cols-15 gap-3 items-end  font-semibold">
+        <div className="w-full grid grid-cols-15 gap-3 items-end font-semibold">
           {/* Trip Type */}
           <div className="col-span-1 col-span-2">
-            <label className="block text-xs sm:text-sm text-white">
+            <label className="block text-xs text-white/80 font-medium mb-1">
               Trip Type
             </label>
             <select
               value={tripType}
-              onChange={(e) => setTripType(e.target.value)}
-              className="w-full p-2 bg-transparent font-medium text-sm sm:text-base border-b border-white text-white placeholder-white focus:outline-none"
+              onChange={(e) => {
+                const newType = e.target.value;
+                setTripType(newType);
+                if (newType === "ONE_WAY") {
+                  handleFlightInputChange("return", null);
+                }
+              }}
+              className="w-full py-1.5 px-0 bg-transparent font-semibold text-sm sm:text-[15px] border-b border-white text-white placeholder-white focus:outline-none"
               disabled={!isEditable}
             >
               <option value="ONE_WAY" className="text-black font-medium">
@@ -460,13 +558,16 @@ function FlightSearchHeader() {
               <option value="ROUND_TRIP" className="text-black font-medium">
                 Round Trip
               </option>
+              <option value="SPECIAL_ROUND_TRIP" className="text-black font-medium">
+                Special Round Trip
+              </option>
               {/* <option value="multiCity" className='text-black font-medium'>Multi City</option> */}
             </select>
           </div>
 
           {tripType === "multiCity" ? (
             <div className="col-span-11 flex flex-col items-start">
-              <label className="block text-xs sm:text-sm text-white ">
+              <label className="block text-xs text-white/80 font-medium mb-1">
                 From (Multi City)
               </label>
               <input
@@ -476,18 +577,18 @@ function FlightSearchHeader() {
                 onChange={(e) =>
                   handleFlightInputChange("from", e.target.value)
                 }
-                className="w-full bg-transparent font-medium text-sm sm:text-base border-b border-white text-white placeholder-white focus:outline-none"
+                className="w-full bg-transparent font-semibold text-sm sm:text-[15px] border-b border-white text-white placeholder-white focus:outline-none py-1.5"
               />
             </div>
           ) : (
             <>
               {/* From */}
               <div className="col-span-2">
-                <label className="block text-xs sm:text-sm text-white">
+                <label className="block text-xs text-white/80 font-medium mb-1">
                   From
                 </label>
                 <Select
-                  options={fromAirportOptions}
+                  options={debouncedFrom?.trim().length >= 1 ? fromAirportOptions : []}
                   isLoading={fromLoading}
                   loadingMessage={() => (
                     <div className="flex justify-center py-3">
@@ -495,31 +596,47 @@ function FlightSearchHeader() {
                     </div>
                   )}
                   noOptionsMessage={() =>
-                    debouncedFrom.length === 0 ? null : "No airports found"
+                    !debouncedFrom?.trim() ? null : "No airports found"
                   }
                   onInputChange={(value, { action }) => {
                     if (action === "input-change") {
                       setFromSearch(value);
+                    } else if (action === "menu-close" || action === "set-value") {
+                      setFromSearch("");
+                      setDebouncedFrom("");
                     }
+                  }}
+                  onMenuOpen={() => {
+                    setFromSearch("");
+                    setDebouncedFrom("");
+                  }}
+                  onMenuClose={() => {
+                    setFromSearch("");
+                    setDebouncedFrom("");
                   }}
                   value={flightSearchInfo.from}
                   onChange={(option) => {
                     handleFlightInputChange("from", option);
+                    setFromSearch("");
+                    setDebouncedFrom("");
                   }}
                   placeholder="Origin"
                   isDisabled={!isEditable}
+                  isClearable={false}
                   isSearchable
                   filterOption={null}
                   menuPlacement="bottom"
                   getOptionLabel={(option) =>
-                    `${option.city} - ${option.airportName}`
+                    `${option.city} ${option.airportCode} ${option.airportName}`
                   }
                   getOptionValue={(option) => option.airportCode}
                   components={{
                     Option: CustomOption,
+                    SingleValue: CustomSingleValue,
                     DropdownIndicator: () => null,
                     IndicatorSeparator: () => null,
                     LoadingIndicator: () => null,
+                    ClearIndicator: () => null,
                   }}
                   classNamePrefix="flight-select"
                   styles={{
@@ -528,48 +645,70 @@ function FlightSearchHeader() {
                       backgroundColor: "transparent",
                       border: "none",
                       borderBottom: "1px solid",
-                      borderColor: state.isFocused ? "#3b82f6" : "#9ca3af",
+                      borderColor: state.isFocused ? "#3b82f6" : "#ffffff",
                       borderRadius: 0,
                       boxShadow: "none",
-                      padding: "2px 0",
+                      padding: "0px",
+                      minHeight: "44px",
                       cursor: "pointer",
-                      fontSize: "1.10rem",
+                      fontSize: "0.95rem",
+                      fontWeight: 600,
                       color: "white",
                       "&:hover": { borderColor: "#ffffff" },
                     }),
                     valueContainer: (base) => ({
                       ...base,
+                      padding: "2px 0",
                       color: "white",
+                      overflow: "hidden",
                     }),
                     input: (base) => ({
                       ...base,
+                      margin: 0,
+                      padding: 0,
                       color: "white",
                     }),
-                    singleValue: (base) => ({
+                    singleValue: (base, state) => ({
                       ...base,
+                      position: "relative",
+                      transform: "none",
+                      maxWidth: "100%",
+                      margin: 0,
                       color: "white",
+                      display: (state.selectProps.inputValue || state.isFocused || state.selectProps.menuIsOpen) ? "none" : "block",
                     }),
                     placeholder: (base) => ({
                       ...base,
-                      color: "white",
+                      margin: 0,
+                      color: "rgba(255,255,255,0.8)",
+                      fontSize: "0.95rem",
+                      fontWeight: 600,
                     }),
                     option: (base, state) => ({
                       ...base,
                       backgroundColor: state.isFocused
-                        ? "#e5e7eb"
+                        ? "#f3f4f6"
                         : "transparent",
-                      color: "#2066ff",
+                      color: "#111827",
                       cursor: "pointer",
-                      "&:active": { backgroundColor: "#d1d5db" },
+                      padding: "6px 8px",
+                      borderRadius: "10px",
+                      "&:active": { backgroundColor: "#e5e7eb" },
                     }),
                     menu: (base) => ({
                       ...base,
                       zIndex: 50,
-                      width: "400px",
+                      width: "420px",
+                      borderRadius: "14px",
+                      padding: "6px",
+                      boxShadow: "0 10px 25px -5px rgba(0, 0, 0, 0.15), 0 8px 10px -6px rgba(0, 0, 0, 0.1)",
+                      border: "1px solid #e5e7eb",
+                      backgroundColor: "#ffffff",
                     }),
                     menuList: (base) => ({
                       ...base,
                       padding: 0,
+                      maxHeight: "280px",
                     }),
                   }}
                 />
@@ -612,15 +751,26 @@ function FlightSearchHeader() {
 
               {/* To */}
               <div className="col-span-2">
-                <label className="block text-xs sm:text-sm text-white">
+                <label className="block text-xs text-white/80 font-medium mb-1">
                   To
                 </label>
                 <Select
-                  options={toAirportOptions}
+                  options={debouncedTo?.trim().length >= 1 ? toAirportOptions : []}
                   onInputChange={(value, { action }) => {
                     if (action === "input-change") {
                       setToSearch(value);
+                    } else if (action === "menu-close" || action === "set-value") {
+                      setToSearch("");
+                      setDebouncedTo("");
                     }
+                  }}
+                  onMenuOpen={() => {
+                    setToSearch("");
+                    setDebouncedTo("");
+                  }}
+                  onMenuClose={() => {
+                    setToSearch("");
+                    setDebouncedTo("");
                   }}
                   isLoading={toLoading}
                   loadingMessage={() => (
@@ -628,24 +778,32 @@ function FlightSearchHeader() {
                       <div className="w-5 h-5 border-2 border-gray-400 border-t-transparent rounded-full animate-spin"></div>
                     </div>
                   )}
+                  noOptionsMessage={() =>
+                    !debouncedTo?.trim() ? null : "No airports found"
+                  }
                   value={flightSearchInfo.to}
                   onChange={(option) => {
                     handleFlightInputChange("to", option);
+                    setToSearch("");
+                    setDebouncedTo("");
                   }}
                   isDisabled={!isEditable}
+                  isClearable={false}
                   placeholder="Destination"
                   isSearchable
                   filterOption={null}
                   menuPlacement="bottom"
                   getOptionLabel={(option) =>
-                    `${option.city} - ${option.airportName}`
+                    `${option.city} ${option.airportCode} ${option.airportName}`
                   }
                   getOptionValue={(option) => option.airportCode}
                   components={{
                     Option: CustomOption,
+                    SingleValue: CustomSingleValue,
                     DropdownIndicator: () => null,
                     IndicatorSeparator: () => null,
                     LoadingIndicator: () => null,
+                    ClearIndicator: () => null,
                   }}
                   classNamePrefix="flight-select"
                   styles={{
@@ -654,48 +812,70 @@ function FlightSearchHeader() {
                       backgroundColor: "transparent",
                       border: "none",
                       borderBottom: "1px solid",
-                      borderColor: state.isFocused ? "#3b82f6" : "#9ca3af",
+                      borderColor: state.isFocused ? "#3b82f6" : "#ffffff",
                       borderRadius: 0,
                       boxShadow: "none",
-                      padding: "2px 0",
+                      padding: "0px",
+                      minHeight: "44px",
                       cursor: "pointer",
-                      fontSize: "1.10rem",
+                      fontSize: "0.95rem",
+                      fontWeight: 600,
                       color: "white",
                       "&:hover": { borderColor: "#ffffff" },
                     }),
                     valueContainer: (base) => ({
                       ...base,
+                      padding: "2px 0",
                       color: "white",
+                      overflow: "hidden",
                     }),
                     input: (base) => ({
                       ...base,
+                      margin: 0,
+                      padding: 0,
                       color: "white",
                     }),
-                    singleValue: (base) => ({
+                    singleValue: (base, state) => ({
                       ...base,
+                      position: "relative",
+                      transform: "none",
+                      maxWidth: "100%",
+                      margin: 0,
                       color: "white",
+                      display: (state.selectProps.inputValue || state.isFocused || state.selectProps.menuIsOpen) ? "none" : "block",
                     }),
                     placeholder: (base) => ({
                       ...base,
-                      color: "white",
+                      margin: 0,
+                      color: "rgba(255,255,255,0.8)",
+                      fontSize: "0.95rem",
+                      fontWeight: 600,
                     }),
                     option: (base, state) => ({
                       ...base,
                       backgroundColor: state.isFocused
-                        ? "#e5e7eb"
+                        ? "#f3f4f6"
                         : "transparent",
-                      color: "#2066ff",
+                      color: "#111827",
                       cursor: "pointer",
-                      "&:active": { backgroundColor: "#d1d5db" },
+                      padding: "6px 8px",
+                      borderRadius: "10px",
+                      "&:active": { backgroundColor: "#e5e7eb" },
                     }),
                     menu: (base) => ({
                       ...base,
                       zIndex: 50,
-                      width: "400px",
+                      width: "420px",
+                      borderRadius: "14px",
+                      padding: "6px",
+                      boxShadow: "0 10px 25px -5px rgba(0, 0, 0, 0.15), 0 8px 10px -6px rgba(0, 0, 0, 0.1)",
+                      border: "1px solid #e5e7eb",
+                      backgroundColor: "#ffffff",
                     }),
                     menuList: (base) => ({
                       ...base,
                       padding: 0,
+                      maxHeight: "280px",
                     }),
                   }}
                 />
@@ -703,20 +883,20 @@ function FlightSearchHeader() {
 
               {/* Depart */}
               <div className="col-span-2 relative" ref={departRef}>
-                <label className="block text-xs sm:text-sm text-white flex items-center gap-2">
+                <label className="block text-xs text-white/80 font-medium mb-1 flex items-center gap-2">
                   Depart
                 </label>
 
                 <input
                   type="text"
                   readOnly
-                  value={departSelected ? format(departSelected, "PPP") : ""}
+                  value={departSelected ? format(departSelected, "dd/MM/yyyy") : ""}
                   placeholder="Select Depart"
                   onClick={() => {
                     if (!isEditable) return;
                     setDepartOpen((prev) => !prev);
                   }}
-                  className={`w-full text-lg text-white border-b border-white focus:outline-none placeholder-white p-2 ${isEditable ? "cursor-pointer" : "cursor-default"}`}
+                  className={`w-full text-sm sm:text-[15px] font-semibold text-white border-b border-white focus:outline-none placeholder-white py-1.5 px-0 ${isEditable ? "cursor-pointer" : "cursor-default"}`}
                   disabled={!isEditable}
                 />
 
@@ -742,8 +922,8 @@ function FlightSearchHeader() {
 
               {/* Return — always visible; × clears value only */}
               <div className="col-span-2 relative" ref={returnRef}>
-                <div className="flex items-center justify-between">
-                  <label className="block text-xs sm:text-sm text-white flex items-center gap-2">
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-xs text-white/80 font-medium flex items-center gap-2">
                     Return
                   </label>
                   {flightSearchInfo.return && (
@@ -764,7 +944,7 @@ function FlightSearchHeader() {
                   readOnly
                   value={
                     flightSearchInfo.return
-                      ? format(flightSearchInfo.return, "PPP")
+                      ? format(flightSearchInfo.return, "dd/MM/yyyy")
                       : ""
                   }
                   placeholder="Select Return"
@@ -772,7 +952,7 @@ function FlightSearchHeader() {
                     if (!isEditable) return;
                     setReturnOpen((prev) => !prev);
                   }}
-                  className={`w-full text-lg text-white border-b border-white focus:outline-none placeholder-white p-2 ${isEditable ? "cursor-pointer" : "cursor-default"}`}
+                  className={`w-full text-sm sm:text-[15px] font-semibold text-white border-b border-white focus:outline-none placeholder-white py-1.5 px-0 ${isEditable ? "cursor-pointer" : "cursor-default"}`}
                   disabled={!isEditable}
                 />
 
@@ -794,7 +974,7 @@ function FlightSearchHeader() {
 
               {/* Traveler */}
               <div className="col-span-2 relative">
-                <label className="block text-xs sm:text-sm">
+                <label className="block text-xs text-white/80 font-medium mb-1">
                   Travelers & Class
                 </label>
                 <div
@@ -802,18 +982,10 @@ function FlightSearchHeader() {
                     if (!isEditable) return;
                     setShowTravellerBox((prev) => !prev);
                   }}
-                  className={`border-b border-white text-white font-medium text-base sm:text-lg flex justify-between items-center  ${isEditable ? "cursor-pointer" : ""}`}
+                  className={`border-b border-white text-white font-semibold text-sm sm:text-[15px] flex justify-between items-center py-1.5 ${isEditable ? "cursor-pointer" : ""}`}
                 >
-                  <span className="truncate whitespace-nowrap overflow-hidden text-ellipsis p-2">
+                  <span className="truncate whitespace-nowrap overflow-hidden text-ellipsis">
                     {(() => {
-                      const toNumber = (v) => {
-                        if (typeof v === "string" && v.startsWith(">")) {
-                          const parsed = parseInt(v.slice(1), 10);
-                          return Number.isNaN(parsed) ? 0 : parsed;
-                        }
-                        const n = Number(v);
-                        return Number.isNaN(n) ? 0 : n;
-                      };
                       const totalTravellers = [
                         travellers.adults,
                         travellers.children,
@@ -849,22 +1021,18 @@ function FlightSearchHeader() {
                           {Array.from({ length: 9 }).map((_, i) => (
                             <div
                               key={i}
-                              onClick={() =>
-                                setTravellers((t) => ({ ...t, adults: i + 1 }))
-                              }
+                              onClick={() => handleAdultsChange(i + 1)}
                               className={`px-2 sm:px-3 py-2 text-xs sm:text-sm cursor-pointer border-r last:border-r-0
-                                                        ${travellers.adults === i + 1 ? "bg-[#78080B] text-white" : "hover:bg-gray-100"}`}
+                                                        ${(Number(travellers.adults) === i + 1 && travellers.adults !== ">9" && Number(travellers.adults) < 10) ? "bg-[#78080B] text-white" : "hover:bg-gray-100"}`}
                             >
                               {i + 1}
                             </div>
                           ))}
                         </div>
                         <div
-                          onClick={() =>
-                            setTravellers((t) => ({ ...t, adults: ">9" }))
-                          }
+                          onClick={() => handleAdultsChange(">9")}
                           className={`px-3 sm:px-4 py-2 text-xs sm:text-sm cursor-pointer border rounded-md
-                                                ${travellers.adults === ">9" ? "bg-[#78080B] text-white" : "hover:bg-gray-100"}`}
+                                                ${(travellers.adults === ">9" || Number(travellers.adults) >= 10) ? "bg-[#78080B] text-white" : "hover:bg-gray-100"}`}
                         >
                           &gt;9
                         </div>
@@ -894,7 +1062,7 @@ function FlightSearchHeader() {
                                     }))
                                   }
                                   className={`px-2 sm:px-3 py-2 text-xs sm:text-sm cursor-pointer border-r last:border-r-0
-                                                                ${travellers.children === i ? "bg-[#78080B] text-white" : "hover:bg-gray-100"}`}
+                                                                ${(Number(travellers.children) === i && travellers.children !== ">6" && Number(travellers.children) < 7) ? "bg-[#78080B] text-white" : "hover:bg-gray-100"}`}
                                 >
                                   {i}
                                 </div>
@@ -905,7 +1073,7 @@ function FlightSearchHeader() {
                                 setTravellers((t) => ({ ...t, children: ">6" }))
                               }
                               className={`px-3 sm:px-4 py-2 text-xs sm:text-sm cursor-pointer border rounded-md 
-                                                        ${travellers.children === ">6" ? "bg-[#78080B] text-white" : "hover:bg-gray-100"}`}
+                                                        ${(travellers.children === ">6" || Number(travellers.children) >= 7) ? "bg-[#78080B] text-white" : "hover:bg-gray-100"}`}
                             >
                               &gt;6
                             </div>
@@ -923,28 +1091,44 @@ function FlightSearchHeader() {
                           </p>
                           <div className="flex justify-between items-start mt-2 gap-2">
                             <div className="flex border rounded-md overflow-hidden flex-wrap">
-                              {Array.from({ length: 6 }).map((_, i) => (
+                              {Array.from({ length: 6 }).map((_, i) => {
+                                const isInfantDisabled = i > getAdultCount(travellers.adults);
+                                const isSelected = Number(travellers.infants) === i && travellers.infants !== ">6" && Number(travellers.infants) < 7;
+                                return (
+                                  <div
+                                    key={i}
+                                    onClick={() => !isInfantDisabled && handleInfantsChange(i)}
+                                    title={isInfantDisabled ? "Number of infants cannot exceed number of adults" : undefined}
+                                    className={`px-2 sm:px-3 py-2 text-xs sm:text-sm border-r last:border-r-0 transition-colors
+                                      ${isSelected
+                                        ? "bg-[#78080B] text-white font-medium"
+                                        : isInfantDisabled
+                                        ? "opacity-30 cursor-not-allowed bg-gray-100 text-gray-400 select-none"
+                                        : "cursor-pointer hover:bg-gray-100 text-gray-800"}`}
+                                  >
+                                    {i}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                            {(() => {
+                              const isMoreThan6Disabled = getAdultCount(travellers.adults) < 7;
+                              const isSelected = travellers.infants === ">6" || Number(travellers.infants) >= 7;
+                              return (
                                 <div
-                                  key={i}
-                                  onClick={() =>
-                                    setTravellers((t) => ({ ...t, infants: i }))
-                                  }
-                                  className={`px-2 sm:px-3 py-2 text-xs sm:text-sm cursor-pointer border-r last:border-r-0
-                                                                ${travellers.infants === i ? "bg-[#78080B] text-white" : "hover:bg-gray-100"}`}
+                                  onClick={() => !isMoreThan6Disabled && handleInfantsChange(">6")}
+                                  title={isMoreThan6Disabled ? "Number of infants cannot exceed number of adults" : undefined}
+                                  className={`px-3 sm:px-4 py-2 text-xs sm:text-sm border rounded-md transition-colors
+                                    ${isSelected
+                                      ? "bg-[#78080B] text-white font-medium"
+                                      : isMoreThan6Disabled
+                                      ? "opacity-30 cursor-not-allowed bg-gray-100 text-gray-400 select-none"
+                                      : "cursor-pointer hover:bg-gray-100 text-gray-800"}`}
                                 >
-                                  {i}
+                                  &gt;6
                                 </div>
-                              ))}
-                            </div>
-                            <div
-                              onClick={() =>
-                                setTravellers((t) => ({ ...t, infants: ">6" }))
-                              }
-                              className={`px-3 sm:px-4 py-2 text-xs sm:text-sm cursor-pointer border rounded-md
-                                                        ${travellers.infants === ">6" ? "bg-[#78080B] text-white" : "hover:bg-gray-100"}`}
-                            >
-                              &gt;6
-                            </div>
+                              );
+                            })()}
                           </div>
                         </div>
                       </div>
@@ -1009,7 +1193,7 @@ function FlightSearchHeader() {
 
       {/* Fare Type */}
       <div
-        className="filter-section max-w-6xl mx-auto mt-4 font-medium overflow-hidden transition-all duration-500"
+        className="filter-section max-w-7xl mx-auto mt-4 font-medium overflow-hidden transition-all duration-500 sm:px-6 px-5"
         style={{ height: isEditable ? `${fareTypeHeight}px` : "0px" }}
         ref={fareTypeRef}
       >
@@ -1018,12 +1202,10 @@ function FlightSearchHeader() {
             <span className="text-xs sm:text-sm">Fare Type</span>
             <div className="flex flex-col sm:flex-row space-y-2 sm:space-y-0 sm:space-x-6 rounded-xl filterglasseffect px-3 sm:px-4 w-full sm:w-auto">
               {[
-                { value: "regular", label: "Regular", checked: true },
+                { value: "regular", label: "Regular" },
                 { value: "student", label: "Student" },
                 { value: "senior", label: "Senior Citizen" },
-                { value: "armed", label: "Armed Forces" },
-                { value: "doctor", label: "Doctor and Nurses" },
-              ].map(({ value, label, checked }, i) => (
+              ].map(({ value, label }, i) => (
                 <div
                   key={value}
                   className={`${i !== 0 ? "sm:border-l border-white" : ""}`}
@@ -1033,8 +1215,9 @@ function FlightSearchHeader() {
                       type="radio"
                       name="fareType"
                       value={value}
-                      defaultChecked={checked}
-                      className="mr-2 text-red-600 focus:ring-0"
+                      checked={fareType === value}
+                      onChange={() => setFareType(value)}
+                      className="mr-2 text-red-600 focus:ring-0 cursor-pointer"
                       disabled={!isEditable}
                     />
                     <span>{label}</span>

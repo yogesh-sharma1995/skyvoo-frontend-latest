@@ -1,5 +1,4 @@
 import React, { useState, useCallback, lazy, Suspense } from 'react';
-import { X } from 'lucide-react';
 import CompactFlightCard from './CompactFlightCard.jsx';
 
 const ViewFlightDetails = lazy(() => import('./ViewFlightDetails'));
@@ -13,6 +12,7 @@ function RoundTripFlightRow({
     selectedReturn,
     onSelectOutbound,
     onSelectReturn,
+    showFareBreakdown,
 }) {
     const isOutboundSelected =
         !!outboundFlight &&
@@ -27,20 +27,6 @@ function RoundTripFlightRow({
         setOpenDetails(prev => prev === leg ? null : leg);
     }, []);
 
-    const totalPrice =
-        (outboundFlight?.AirlineMinNetPrice || 0) +
-        (returnFlight?.AirlineMinNetPrice || 0);
-
-    // For compare: use the combined key from Index.jsx
-    const handleCompare = useCallback(() => {
-        onToggleCompare(outboundFlight); // outboundFlight has the combined AirlineCodeAndId
-    }, [onToggleCompare, outboundFlight]);
-
-    const handleViewPrices = useCallback(() => {
-        // Pass the outbound flight; Index.jsx handleViewPrices will use flight.totalPriceList
-        onViewPrices(outboundFlight);
-    }, [onViewPrices, outboundFlight]);
-
     return (
         <div className="rounded-2xl">
 
@@ -53,6 +39,7 @@ function RoundTripFlightRow({
                     onToggleDetails={() => handleToggle('outbound')}
                     isSelected={isOutboundSelected}
                     onSelect={onSelectOutbound}
+                    showFareBreakdown={showFareBreakdown}
                 />
                 <CompactFlightCard
                     flight={returnFlight}
@@ -61,24 +48,21 @@ function RoundTripFlightRow({
                     onToggleDetails={() => handleToggle('return')}
                     isSelected={isReturnSelected}
                     onSelect={onSelectReturn}
+                    showFareBreakdown={showFareBreakdown}
                 />
             </div>
 
-            {/* ---- Expandable flight details ---- */}
-            <div
-                className={`shadow-2xl mt-2 overflow-hidden transition-[max-height] duration-700 ease-in-out ${openDetails ? 'max-h-[500px]' : 'max-h-0'}`}
-            >
-                {openDetails === 'outbound' && (
-                    <Suspense fallback={<div className="p-4 text-sm text-gray-500">Loading details...</div>}>
-                        <ViewFlightDetails flight={outboundFlight} />
-                    </Suspense>
-                )}
-                {openDetails === 'return' && (
-                    <Suspense fallback={<div className="p-4 text-sm text-gray-500">Loading details...</div>}>
-                        <ViewFlightDetails flight={returnFlight} />
-                    </Suspense>
-                )}
-            </div>
+            {/* ---- Flight Details Modal ---- */}
+            {openDetails === 'outbound' && (
+                <Suspense fallback={null}>
+                    <ViewFlightDetails flight={outboundFlight} onClose={() => handleToggle(null)} />
+                </Suspense>
+            )}
+            {openDetails === 'return' && (
+                <Suspense fallback={null}>
+                    <ViewFlightDetails flight={returnFlight} onClose={() => handleToggle(null)} />
+                </Suspense>
+            )}
 
         </div>
     );

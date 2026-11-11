@@ -8,6 +8,7 @@ import FlightPriceDetailsModal from '@/components/modals/FlightPriceDetailsModal
 import SignInModal from '@/components/modals/SignInModal';
 import { useCompareFlights } from "@/contexts/CompareContext.jsx";
 import { getAirlineLogo } from "@/utils/airlineCode";
+import { formatFlightStops } from "@/utils/flightStops";
 
 export default function CompareFlights() {
     const navigate = useNavigate();
@@ -51,7 +52,7 @@ export default function CompareFlights() {
             : 'grid-cols-1 md:grid-cols-7';
 
     return (
-        <>
+        <div className="pt-[52px] sm:pt-[56px]">
             {isFlightDetailsModalOpen && selectedFlightModalCtx && (
                 <FlightPriceDetailsModal
                     flight={selectedFlightModalCtx.flight}
@@ -67,7 +68,11 @@ export default function CompareFlights() {
             <div className="relative bg-white ">
                 {/* Background Image */}
                 <img
-                    className="absolute right-0 z-10 max-w-full h-auto object-cover"
+                    className="absolute right-0 top-0 z-0 max-w-full h-auto object-cover pointer-events-none"
+                    style={{
+                        maskImage: 'linear-gradient(to bottom, black 70%, transparent 100%)',
+                        WebkitMaskImage: 'linear-gradient(to bottom, black 70%, transparent 100%)'
+                    }}
                     src={GrayFadedBg}
                     alt="gray faded bg"
                 />
@@ -230,7 +235,7 @@ export default function CompareFlights() {
                                         const departTime = flight.DepartureTime || '--:--';
                                         const arriveTime = flight.ArrivalTime || '--:--';
                                         const duration = flight.AirlineDuration || '';
-                                        const stops = flight.AirlineStops === 0 ? "Non Stop" : `${flight.AirlineStops} Stop`;
+                                        const stops = formatFlightStops(flight);
                                         const dayTag = flight.ArrivalDate && flight.DepartureDate && flight.ArrivalDate !== flight.DepartureDate
                                             ? flight.ArrivalDate
                                             : '';
@@ -367,7 +372,7 @@ export default function CompareFlights() {
                     )}
                 </div>
             </div>
-        </>
+        </div>
     );
 }
 

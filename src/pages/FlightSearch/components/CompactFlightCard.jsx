@@ -3,8 +3,14 @@ import { Check } from 'lucide-react';
 import RipSide from "@/assets/imgs/ripSide.webp";
 import BookingFlightFormBg from "@/assets/imgs/flightresultsbg.webp";
 import { getAirlineLogo } from "@/utils/airlineCode";
+import { useAuth } from "@/contexts/AuthContext";
+import { getFlightDisplayPrice, getB2BFareBreakdown } from "@/utils/fareCalculations";
+import { formatFlightStops, getFlightStops, getFlightLayoverAirports, formatStopsWithLayovers } from "@/utils/flightStops";
 
-function CompactFlightCard({ flight, label, isDetailsOpen, onToggleDetails, isSelected, onSelect }) {
+function CompactFlightCard({ flight, label, isDetailsOpen, onToggleDetails, isSelected, onSelect, showFareBreakdown }) {
+    const { user, isB2B: authIsB2B } = useAuth();
+    const userType = (user?.UserType || user?.userType || user?.Role || user?.role || "").toLowerCase();
+    const isB2B = authIsB2B || userType === "b2b";
 
     if (!flight) {
         return (
@@ -21,6 +27,8 @@ function CompactFlightCard({ flight, label, isDetailsOpen, onToggleDetails, isSe
             </div>
         );
     }
+
+    const price = getFlightDisplayPrice(flight);
 
     return (
         <div
@@ -44,12 +52,6 @@ function CompactFlightCard({ flight, label, isDetailsOpen, onToggleDetails, isSe
                         <Check size={10} className="text-white" strokeWidth={3} />
                     </div>
                 )}
-                {/* Ticket tear effect */}
-                {/* <img
-                    className="absolute h-[82%] -right-[3px] top-[9%]"
-                    src={RipSide}
-                    alt="ribbon side"
-                /> */}
 
                 {/* DEP / RETURN label banner */}
                 <div className="pl-3 pr-6 py-[3px] relative">
@@ -79,14 +81,14 @@ function CompactFlightCard({ flight, label, isDetailsOpen, onToggleDetails, isSe
                     <div className="flex items-center gap-1.5 mb-2">
                         <div className="w-6 h-6 sm:w-7 sm:h-7 flex-shrink-0 flex items-center justify-center">
                             <img
-                                src={getAirlineLogo(flight.AirlineLogo[0])}
-                                alt={flight.AirlineName?.split(",")[0]}
+                                src={getAirlineLogo(flight.AirlineLogo?.[0])}
+                                alt={flight.AirlineName?.split(",")?.[0] || "Airline"}
                                 className="max-w-full max-h-full object-contain"
                             />
                         </div>
                         <div className="min-w-0">
                             <div className="font-semibold text-[9px] sm:text-xs leading-tight truncate">
-                                {flight.AirlineName} {flight.Vendor}
+                                {flight.AirlineName} {typeof flight.Vendor === 'string' ? flight.Vendor : ''}
                             </div>
                             <div className="text-[7px] sm:text-[9px] text-gray-500 leading-tight">
                                 {flight.AirlineCodeAndId}
@@ -95,69 +97,76 @@ function CompactFlightCard({ flight, label, isDetailsOpen, onToggleDetails, isSe
                     </div>
 
                     {/* Flight times */}
-                    <div className="flex items-center justify-between gap-1 pr-2">
+                    {(() => {
+                        const legs = flight.FlightDetailResponses || flight.flightDetailResponses || [];
+                        const firstLeg = legs[0] || {};
+                        const lastLeg = legs.length > 1 ? legs[legs.length - 1] : firstLeg;
 
-                        {/* Departure */}
-                        <div className="text-center flex-shrink-0">
-                            <div className="text-[12px] sm:text-[15px] md:text-base font-bold leading-none">
-                                {flight.DepartureTime}
-                            </div>
-                            <div className="text-[6px] sm:text-[8px] text-gray-600 leading-tight mt-[2px] max-w-[52px] sm:max-w-[68px] truncate">
-                                {flight.AirlineDeparture?.city}
-                            </div>
-                        </div>
+                        const depTime = flight.DepartureTime || firstLeg.DepartureTime;
+                        const depCity = flight.AirlineDeparture?.city || firstLeg.AirlineDeparture?.city;
 
-                        {/* Duration line */}
-                        <div className="flex flex-col items-center flex-1 px-1 min-w-0">
-                            <span className="text-[6px] sm:text-[8px] text-gray-700 leading-none mb-[2px]">
-                                {flight.AirlineDuration}
-                            </span>
-                            <div className="w-full h-[1.5px] bg-[#920000] rounded-full" />
-                            <span className="text-[6px] sm:text-[8px] text-gray-700 leading-none mt-[2px]">
-                                {flight.AirlineStops === 0 ? "Non Stop" : `${flight.AirlineStops} Stop`}
-                            </span>
-                        </div>
+                        const arrTime = (legs.length > 1 ? lastLeg.ArrivalTime : flight.ArrivalTime) || lastLeg.ArrivalTime || flight.ArrivalTime;
+                        const arrCity = (legs.length > 1 ? (lastLeg.AirlineArrival?.city || lastLeg.AirlineArrival?.name) : flight.AirlineArrival?.city) || flight.AirlineArrival?.city;
 
-                        {/* Arrival */}
-                        <div className="text-center flex-shrink-0">
-                            <div className="text-[12px] sm:text-[15px] md:text-base font-bold leading-none">
-                                {flight.ArrivalTime}
+                        const stopsCount = getFlightStops(flight);
+                        const layovers = getFlightLayoverAirports(legs.length > 0 ? legs : flight);
+                        const stopsDisplay = formatStopsWithLayovers(stopsCount, layovers);
+
+                        return (
+                            <div className="flex items-center justify-between gap-1 pr-2">
+                                {/* Departure */}
+                                <div className="text-center flex-shrink-0">
+                                    <div className="text-[12px] sm:text-[15px] md:text-base font-bold leading-none">
+                                        {depTime}
+                                    </div>
+                                    <div className="text-[6px] sm:text-[8px] text-gray-600 leading-tight mt-[2px] max-w-[52px] sm:max-w-[68px] truncate">
+                                        {depCity}
+                                    </div>
+                                </div>
+
+                                {/* Duration line */}
+                                <div className="flex flex-col items-center flex-1 px-1 min-w-0">
+                                    <span className="text-[6px] sm:text-[8px] text-gray-700 leading-none mb-[2px]">
+                                        {flight.AirlineDuration}
+                                    </span>
+                                    <div className="w-full h-[1.5px] bg-[#920000] rounded-full" />
+                                    <span className="text-[6px] sm:text-[8px] text-gray-700 leading-none mt-[2px]">
+                                        {stopsDisplay}
+                                    </span>
+                                </div>
+
+                                {/* Arrival */}
+                                <div className="text-center flex-shrink-0">
+                                    <div className="text-[12px] sm:text-[15px] md:text-base font-bold leading-none">
+                                        {arrTime}
+                                    </div>
+                                    <div className="text-[6px] sm:text-[8px] text-gray-600 leading-tight mt-[2px] max-w-[52px] sm:max-w-[68px] truncate">
+                                        {arrCity}
+                                    </div>
+                                </div>
                             </div>
-                            <div className="text-[6px] sm:text-[8px] text-gray-600 leading-tight mt-[2px] max-w-[52px] sm:max-w-[68px] truncate">
-                                {flight.AirlineArrival?.city}
-                            </div>
-                        </div>
-                    </div>
+                        );
+                    })()}
 
                     {/* Price + View Details */}
                     <div className="flex items-center justify-between mt-2 pr-2">
                         <div className="text-[10px] sm:text-sm font-bold text-[#811919]">
-                            ₹ {flight.AirlineMinNetPrice?.toLocaleString('en-IN')}
+                            ₹ {price.toLocaleString('en-IN')}
                         </div>
-                        {/* <button
-                            className="text-[#811919] cursor-pointer hover:underline text-[7px] sm:text-[9px] font-medium whitespace-nowrap"
-                            onClick={onToggleDetails}
-                        >
-                            {isDetailsOpen ? "Hide" : "View"} Details
-                        </button> */}
                     </div>
 
-                    {/* Select button
-                    {onSelect && (
-                        <button
-
-                            className={`
-                                mt-2 w-full py-[5px] rounded-lg text-[8px] sm:text-[10px] font-bold tracking-wider
-                                transition-all duration-200 cursor-pointer border
-                                ${isSelected
-                                    ? 'bg-green-500/20 border-green-500/50 text-green-700 hover:bg-green-500/30'
-                                    : 'bg-[#78080B]/10 border-[#78080B]/30 text-[#78080B] hover:bg-[#78080B]/20'
-                                }
-                            `}
-                        >
-                            {isSelected ? '✓ Selected' : 'Select'}
-                        </button>
-                    )} */}
+                    {/* B2B Fare Breakdown in Compact Card */}
+                    {showFareBreakdown && isB2B && (() => {
+                        const b2bData = getB2BFareBreakdown(flight);
+                        if (!b2bData) return null;
+                        return (
+                            <div className="mt-1 flex flex-wrap items-center justify-between gap-x-1.5 text-[8px] sm:text-[9px] text-gray-700 font-medium">
+                                <span>Markup: ₹{b2bData.retailerMarkup.toLocaleString('en-IN')}</span>
+                                <span>Comm: ₹{b2bData.commission.toLocaleString('en-IN')}</span>
+                                <span>Net: ₹{b2bData.netFare.toLocaleString('en-IN')}</span>
+                            </div>
+                        );
+                    })()}
 
                 </div>
             </div>
