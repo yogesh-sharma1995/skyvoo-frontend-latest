@@ -1036,14 +1036,30 @@ export default function ReviewDetails() {
 
   // Collect ALL flight segments across all trips in fareReviewData.TripInfo
   const allFlightSegments = useMemo(() => {
-    return (fareReviewData?.TripInfo ?? []).flatMap((trip, tripIdx) => {
+    const bookingData = bookingStore.get();
+    const tripList = fareReviewData?.TripInfo ?? [];
+
+    // Collect distinct FlightId values from TripBaggageList or TripMealList if available
+    const distinctBaggageFlightIds = [];
+    tripList.forEach((t) => {
+      (t?.TripBaggageList || []).forEach((b) => {
+        const fId = b?.FlightId || b?.flightId;
+        if (fId && !distinctBaggageFlightIds.includes(String(fId))) {
+          distinctBaggageFlightIds.push(String(fId));
+        }
+      });
+    });
+
+    return tripList.flatMap((trip, tripIdx) => {
       const tripFlightId =
         trip?.FlightId ||
         trip?.flightId ||
         trip?.FlightDetailResponses?.[0]?.FlightId ||
         trip?.FlightDetailResponses?.[0]?.flightId ||
         trip?.FlightDetailResponses?.[0]?.SegmentId ||
-        (tripIdx === 0 ? FlightId : undefined);
+        (tripIdx === 0
+          ? (FlightId || bookingData?.outboundFlight?.FlightId || distinctBaggageFlightIds[0])
+          : (bookingData?.returnFlight?.FlightId || distinctBaggageFlightIds[tripIdx]));
       const tripFlightKey = trip?.FlightKey || trip?.FlightKeys;
       const legs = trip?.FlightDetailResponses ?? [];
       if (legs.length === 0) {
@@ -1059,10 +1075,13 @@ export default function ReviewDetails() {
           AirlineCode: trip?.AirlineCode,
           FlightNo: trip?.FlightNo,
           tripIndex: tripIdx,
+          legIndex: 0,
         }];
       }
-      return legs.map((leg) => ({
+      return legs.map((leg, lIdx) => ({
         ...leg,
+        legIndex: lIdx,
+        tripIndex: tripIdx,
         FlightId: leg?.FlightId || leg?.flightId || leg?.SegmentId || leg?.segmentId || tripFlightId,
         FlightKey: leg?.FlightKey || leg?.FlightKeys || tripFlightKey,
         AirlineDeparture: leg?.AirlineDeparture || trip?.AirlineDeparture,
@@ -1073,7 +1092,6 @@ export default function ReviewDetails() {
         AirlineName: leg?.AirlineName || trip?.AirlineName,
         AirlineCode: leg?.AirlineCode || trip?.AirlineCode,
         FlightNo: leg?.FlightNo || trip?.FlightNo,
-        tripIndex: tripIdx,
       }));
     });
   }, [fareReviewData, FlightId]);
@@ -1201,6 +1219,25 @@ const getMealKey = (m) => {
   // Compute per-trip baggage (connecting flights share baggage, depart vs return differ)
   const allTripBaggageData = useMemo(() => {
     const tripList = fareReviewData?.TripInfo || [];
+    const bookingData = bookingStore.get();
+
+    // Collect all raw baggage segments across the entire response
+    const allRawBaggageSegs = (() => {
+      const fromTrips = tripList.flatMap((t) => t?.TripBaggageList || []);
+      if (fromTrips.length > 0) return fromTrips;
+      if (Array.isArray(fareReviewData?.TripBaggageList)) return fareReviewData.TripBaggageList;
+      return [];
+    })();
+
+    // Collect distinct FlightId values from all baggage segments
+    const distinctBaggageFlightIds = [];
+    allRawBaggageSegs.forEach((b) => {
+      const fId = b?.FlightId || b?.flightId;
+      if (fId && !distinctBaggageFlightIds.includes(String(fId))) {
+        distinctBaggageFlightIds.push(String(fId));
+      }
+    });
+
     return tripList.map((trip, tIdx) => {
       const legs = trip?.FlightDetailResponses || [];
       const first = legs[0];
@@ -1219,9 +1256,54 @@ const getMealKey = (m) => {
         first?.flightId ||
         first?.SegmentId ||
         trip?.FlightDetailResponses?.[0]?.FlightId ||
-        (tIdx === 0 ? FlightId : undefined);
+        (tIdx === 0
+          ? (FlightId || bookingData?.outboundFlight?.FlightId || distinctBaggageFlightIds[0])
+          : (bookingData?.returnFlight?.FlightId || distinctBaggageFlightIds[tIdx]));
 
-      const tripBaggageRaw = trip?.TripBaggageList || [];
+      // Select ONLY the baggage segments that belong to this specific trip
+      let tripBaggageRaw = [];
+
+      // 1. If trip has its own TripBaggageList with matching FlightId
+      if (tripFlightId && allRawBaggageSegs.length > 0) {
+        const matched = allRawBaggageSegs.filter(
+          (bSeg) => String(bSeg.FlightId || bSeg.flightId) === String(tripFlightId)
+        );
+        if (matched.length > 0) {
+          tripBaggageRaw = matched;
+        }
+      }
+
+      // 2. If distinctBaggageFlightIds has an entry for this trip index
+      if (tripBaggageRaw.length === 0 && distinctBaggageFlightIds.length > 1 && distinctBaggageFlightIds[tIdx]) {
+        const expectedFId = distinctBaggageFlightIds[tIdx];
+        const matched = allRawBaggageSegs.filter(
+          (bSeg) => String(bSeg.FlightId || bSeg.flightId) === String(expectedFId)
+        );
+        if (matched.length > 0) {
+          tripBaggageRaw = matched;
+        }
+      }
+
+      // 3. Check TripType / tripIndex on bSeg
+      if (tripBaggageRaw.length === 0 && allRawBaggageSegs.length > 0) {
+        const matched = allRawBaggageSegs.filter(
+          (bSeg) => bSeg.TripType !== undefined && Number(bSeg.TripType) === tIdx
+        );
+        if (matched.length > 0) {
+          tripBaggageRaw = matched;
+        }
+      }
+
+      // 4. If allRawBaggageSegs has one item per trip
+      if (tripBaggageRaw.length === 0 && allRawBaggageSegs.length === tripList.length && allRawBaggageSegs[tIdx]) {
+        tripBaggageRaw = [allRawBaggageSegs[tIdx]];
+      }
+
+      // 5. Fallback: if trip has its own TripBaggageList, use it directly
+      if (tripBaggageRaw.length === 0 && Array.isArray(trip?.TripBaggageList) && trip.TripBaggageList.length > 0) {
+        tripBaggageRaw = trip.TripBaggageList;
+      }
+
       // Flatten BaggageList from segments or handle direct array
       let extractedBaggage = [];
       if (Array.isArray(tripBaggageRaw)) {
@@ -1275,35 +1357,92 @@ const getMealKey = (m) => {
 
   // Compute per-segment meals (meal selection is per flight segment, matching seat selection)
   const allTripMealData = useMemo(() => {
+    const bookingData = bookingStore.get();
+    const tripList = fareReviewData?.TripInfo || [];
+
+    // Collect all raw meal segments across the entire response
+    const allRawMealSegs = (() => {
+      const fromTrips = tripList.flatMap((t) => t?.TripMealList || []);
+      if (fromTrips.length > 0) return fromTrips;
+      if (Array.isArray(fareReviewData?.TripMealList)) return fareReviewData.TripMealList;
+      return [];
+    })();
+
+    // Collect distinct FlightId values from all meal segments
+    const distinctMealFlightIds = [];
+    allRawMealSegs.forEach((m) => {
+      const fId = m?.FlightId || m?.flightId;
+      if (fId && !distinctMealFlightIds.includes(String(fId))) {
+        distinctMealFlightIds.push(String(fId));
+      }
+    });
+
     return (allFlightSegments || []).map((seg, sIdx) => {
       const dep = seg?.AirlineDeparture?.code || seg?.AirlineDeparture?.city || "";
       const arr = seg?.AirlineArrival?.code || seg?.AirlineArrival?.city || "";
       const sectorStr = dep && arr ? `${dep} → ${arr}` : `Segment ${sIdx + 1}`;
 
-      const trip = fareReviewData?.TripInfo?.[seg.tripIndex ?? 0];
-      const tripMeals = trip?.TripMealList || [];
+      const tripIdx = seg.tripIndex ?? 0;
+      const legIdx = seg.legIndex ?? 0;
+      const targetFlightId = seg.FlightId || (distinctMealFlightIds.length > 1 ? distinctMealFlightIds[tripIdx] : undefined);
+
+      let matchedMealSeg = null;
+
+      // 1. Try matching by both FlightId and SegmentId (legIndex)
+      if (targetFlightId && allRawMealSegs.length > 0) {
+        matchedMealSeg = allRawMealSegs.find((mSeg) => {
+          const mFId = mSeg.FlightId || mSeg.flightId;
+          const mSId = mSeg.SegmentId ?? mSeg.segmentId;
+          if (mFId && String(mFId) === String(targetFlightId)) {
+            if (mSId !== undefined) {
+              return Number(mSId) === Number(legIdx);
+            }
+            return true;
+          }
+          return false;
+        });
+      }
+
+      // 2. If not matched by segmentId, try matching by FlightId alone within this trip's flight
+      if (!matchedMealSeg && targetFlightId && allRawMealSegs.length > 0) {
+        matchedMealSeg = allRawMealSegs.find((mSeg) => {
+          const mFId = mSeg.FlightId || mSeg.flightId;
+          return mFId && String(mFId) === String(targetFlightId);
+        });
+      }
+
+      // 3. Try matching distinct flight IDs by trip index
+      if (!matchedMealSeg && distinctMealFlightIds.length > 1 && distinctMealFlightIds[tripIdx]) {
+        const tripFId = distinctMealFlightIds[tripIdx];
+        matchedMealSeg = allRawMealSegs.find((mSeg) => {
+          const mFId = mSeg.FlightId || mSeg.flightId;
+          return mFId && String(mFId) === String(tripFId);
+        });
+      }
+
+      // 4. Try matching TripType
+      if (!matchedMealSeg && allRawMealSegs.length > 0) {
+        matchedMealSeg = allRawMealSegs.find((mSeg) => {
+          return mSeg.TripType !== undefined && Number(mSeg.TripType) === tripIdx;
+        });
+      }
+
+      // 5. Match by overall segment index sIdx
+      if (!matchedMealSeg && allRawMealSegs[sIdx]) {
+        matchedMealSeg = allRawMealSegs[sIdx];
+      }
+
+      // 6. Fallback to trip's own TripMealList
+      if (!matchedMealSeg) {
+        const trip = tripList[tripIdx];
+        const tripMeals = trip?.TripMealList || [];
+        matchedMealSeg = tripMeals[legIdx] || tripMeals[0];
+      }
+
       let segmentMealItems = [];
-      if (Array.isArray(tripMeals) && tripMeals.length > 0) {
-        const matchedMealSeg = tripMeals.find(
-          (mSeg) => String(mSeg.SegmentId || mSeg.FlightId || mSeg.Key || '') === String(seg.FlightId || seg.SegmentId || '')
-        );
-        if (matchedMealSeg) {
-          const raw = matchedMealSeg.MealList || matchedMealSeg.MealDynamic || matchedMealSeg.MealDetails || matchedMealSeg.Meals || [];
-          segmentMealItems = Array.isArray(raw) ? raw : [raw];
-        } else if (tripMeals[sIdx]?.MealList || tripMeals[sIdx]?.MealDynamic || tripMeals[sIdx]?.MealDetails) {
-          const raw = tripMeals[sIdx].MealList || tripMeals[sIdx].MealDynamic || tripMeals[sIdx].MealDetails || [];
-          segmentMealItems = Array.isArray(raw) ? raw : [raw];
-        } else if (tripMeals[0]?.MealList || tripMeals[0]?.MealDynamic || tripMeals[0]?.MealDetails) {
-          const raw = tripMeals[0].MealList || tripMeals[0].MealDynamic || tripMeals[0].MealDetails || [];
-          segmentMealItems = Array.isArray(raw) ? raw : [raw];
-        } else {
-          segmentMealItems = tripMeals.flatMap((m) => {
-            if (m.MealList && Array.isArray(m.MealList)) return m.MealList;
-            if (m.MealDynamic && Array.isArray(m.MealDynamic)) return m.MealDynamic;
-            if (m.MealDetails && Array.isArray(m.MealDetails)) return m.MealDetails;
-            return [m];
-          });
-        }
+      if (matchedMealSeg) {
+        const raw = matchedMealSeg.MealList || matchedMealSeg.MealDynamic || matchedMealSeg.MealDetails || matchedMealSeg.Meals || [];
+        segmentMealItems = Array.isArray(raw) ? raw : [raw];
       }
 
       // Deduplicate meals within the segment
@@ -1320,8 +1459,8 @@ const getMealKey = (m) => {
 
       return {
         segmentIndex: sIdx,
-        tripIndex: seg.tripIndex ?? 0,
-        FlightId: seg.FlightId,
+        tripIndex: tripIdx,
+        FlightId: targetFlightId || seg.FlightId,
         Sector: `${dep}-${arr}`.toUpperCase(),
         sectorLabel: sectorStr,
         airlineCode: seg.AirlineCode,
