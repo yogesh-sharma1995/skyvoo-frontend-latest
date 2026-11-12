@@ -1166,6 +1166,38 @@ export default function ReviewDetails() {
     setIsFlightSeatMap(false);
   };
 
+// Helper to generate consistent baggage identifier (prioritize Code_Amount and Desc_Amount over unique segment SSRKeys)
+const getBaggageKey = (b) => {
+  if (!b) return "";
+  const code = b.Code ? String(b.Code).trim().toUpperCase() : "";
+  const amt = b.Amount ?? b.amount ?? b.Price ?? b.price ?? b.TotalAmount ?? b.Fare ?? b.Cost;
+  const amtStr = (amt !== undefined && amt !== null) ? String(amt) : "";
+  const desc = (b.Description || b.Desc || b.name || b.Title || (b.Weight ? (typeof b.Weight === 'number' ? `${b.Weight}kg` : String(b.Weight)) : "")).trim().toLowerCase();
+
+  if (code && amtStr) return `${code}_${amtStr}`;
+  if (desc && amtStr) return `${desc}_${amtStr}`;
+  if (code && desc) return `${code}_${desc}`;
+  if (code) return code;
+  if (desc) return desc;
+  return b.SSRKey || JSON.stringify(b);
+};
+
+// Helper to generate consistent meal identifier
+const getMealKey = (m) => {
+  if (!m) return "";
+  const code = m.Code ? String(m.Code).trim().toUpperCase() : "";
+  const amt = m.Amount ?? m.amount ?? m.Price ?? m.price ?? m.TotalAmount ?? m.Fare ?? m.Cost;
+  const amtStr = (amt !== undefined && amt !== null) ? String(amt) : "";
+  const desc = (m.Description || m.Desc || m.name || m.Title || m.Text || "").trim().toLowerCase();
+
+  if (code && amtStr) return `${code}_${amtStr}`;
+  if (desc && amtStr) return `${desc}_${amtStr}`;
+  if (code && desc) return `${code}_${desc}`;
+  if (code) return code;
+  if (desc) return desc;
+  return m.SSRKey || JSON.stringify(m);
+};
+
   // Compute per-trip baggage (connecting flights share baggage, depart vs return differ)
   const allTripBaggageData = useMemo(() => {
     const tripList = fareReviewData?.TripInfo || [];
@@ -1213,11 +1245,11 @@ export default function ReviewDetails() {
         });
       }
 
-      // Deduplicate items within the trip
+      // Deduplicate items within the trip using consistent code/amount/desc key
       const uniqueItems = [];
       const seen = new Set();
       extractedBaggage.forEach((b) => {
-        const id = b.SSRKey || b.Code || b.Description || b.Desc || b.Weight || JSON.stringify(b);
+        const id = getBaggageKey(b);
         if (id && !seen.has(id)) {
           seen.add(id);
           uniqueItems.push({
@@ -1274,6 +1306,18 @@ export default function ReviewDetails() {
         }
       }
 
+      // Deduplicate meals within the segment
+      const uniqueMeals = [];
+      const seenMeals = new Set();
+      (Array.isArray(segmentMealItems) ? segmentMealItems : []).forEach((m) => {
+        if (!m) return;
+        const id = getMealKey(m);
+        if (id && !seenMeals.has(id)) {
+          seenMeals.add(id);
+          uniqueMeals.push(m);
+        }
+      });
+
       return {
         segmentIndex: sIdx,
         tripIndex: seg.tripIndex ?? 0,
@@ -1282,7 +1326,7 @@ export default function ReviewDetails() {
         sectorLabel: sectorStr,
         airlineCode: seg.AirlineCode,
         flightNo: seg.FlightNo,
-        mealList: segmentMealItems,
+        mealList: uniqueMeals,
       };
     });
   }, [allFlightSegments, fareReviewData]);
@@ -1291,11 +1335,14 @@ export default function ReviewDetails() {
     setTravellers((prev) => {
       const updatedCat = [...prev[category]];
       if (updatedCat[index]) {
-        const getItemId = (item) => `${item.tripIndex ?? 0}_${item.SSRKey || item.Code || item.Description}`;
         const currentList = updatedCat[index].selectedBaggage || [];
         updatedCat[index] = {
           ...updatedCat[index],
-          selectedBaggage: currentList.filter((b) => getItemId(b) !== itemId && (b.SSRKey || b.Code || b.Description) !== itemId),
+          selectedBaggage: currentList.filter((b) => {
+            const bKey = `${b.tripIndex ?? 0}_${getBaggageKey(b)}`;
+            const legacyKey = `${b.tripIndex ?? 0}_${b.SSRKey || b.Code || b.Description}`;
+            return bKey !== itemId && legacyKey !== itemId && b.SSRKey !== itemId && b.Code !== itemId;
+          }),
         };
       }
       return { ...prev, [category]: updatedCat };
@@ -1334,11 +1381,14 @@ export default function ReviewDetails() {
     setTravellers((prev) => {
       const updatedCat = [...prev[category]];
       if (updatedCat[index]) {
-        const getItemId = (item) => `${item.segmentIndex ?? 0}_${item.SSRKey || item.Code || item.Description}`;
         const currentList = updatedCat[index].selectedMeals || [];
         updatedCat[index] = {
           ...updatedCat[index],
-          selectedMeals: currentList.filter((m) => getItemId(m) !== itemId && (m.SSRKey || m.Code || m.Description) !== itemId),
+          selectedMeals: currentList.filter((m) => {
+            const mKey = `${m.segmentIndex ?? 0}_${getMealKey(m)}`;
+            const legacyKey = `${m.segmentIndex ?? 0}_${m.SSRKey || m.Code || m.Description}`;
+            return mKey !== itemId && legacyKey !== itemId && m.SSRKey !== itemId && m.Code !== itemId;
+          }),
         };
       }
       return { ...prev, [category]: updatedCat };
@@ -3409,7 +3459,7 @@ export default function ReviewDetails() {
                                   ) : (
                                     <div className="flex flex-wrap gap-1.5 pl-6 mt-1">
                                       {t.selectedBaggage.map((bItem) => {
-                                        const itemId = `${bItem.tripIndex ?? 0}_${bItem.SSRKey || bItem.Code || bItem.Description}`;
+                                        const itemId = `${bItem.tripIndex ?? 0}_${getBaggageKey(bItem)}`;
                                         const routeText = bItem.route || bItem.sectorLabel;
                                         return (
                                           <span
@@ -3454,7 +3504,7 @@ export default function ReviewDetails() {
                                   ) : (
                                     <div className="flex flex-wrap gap-1.5 pl-6 mt-1">
                                       {t.selectedMeals.map((mItem) => {
-                                        const itemId = `${mItem.segmentIndex ?? 0}_${mItem.SSRKey || mItem.Code || mItem.Description}`;
+                                        const itemId = `${mItem.segmentIndex ?? 0}_${getMealKey(mItem)}`;
                                         const segText = mItem.sectorLabel || mItem.Sector;
                                         return (
                                           <span

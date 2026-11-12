@@ -21,6 +21,21 @@ export default function BaggageModal({
     };
   }, []);
 
+  const getItemId = (item) => {
+    if (!item) return "";
+    const code = item.Code ? String(item.Code).trim().toUpperCase() : "";
+    const amt = item.Amount ?? item.amount ?? item.Price ?? item.price ?? item.TotalAmount ?? item.Fare ?? item.Cost;
+    const amtStr = (amt !== undefined && amt !== null) ? String(amt) : "";
+    const desc = (item.Description || item.Desc || item.name || item.Title || item.Text || (item.Weight ? (typeof item.Weight === 'number' ? `${item.Weight}kg` : String(item.Weight)) : "")).trim().toLowerCase();
+
+    if (code && amtStr) return `${code}_${amtStr}`;
+    if (desc && amtStr) return `${desc}_${amtStr}`;
+    if (code && desc) return `${code}_${desc}`;
+    if (code) return code;
+    if (desc) return desc;
+    return item.SSRKey || JSON.stringify(item);
+  };
+
   // Normalize trips: if trips array is provided (Departure trip vs Return trip), use it;
   // otherwise fallback from baggageList
   const normalizedTrips = React.useMemo(() => {
@@ -41,21 +56,29 @@ export default function BaggageModal({
           return [elem];
         });
 
-        const items = flatItems.map((item) => {
-          const desc = item.Description || item.Desc || item.name || item.Title || item.Text || (item.Weight ? (typeof item.Weight === 'number' ? `Additional ${item.Weight} KG` : item.Weight) : "") || item.Code || "Extra Baggage";
-          const amt = item.Amount ?? item.amount ?? item.Price ?? item.price ?? item.TotalAmount ?? item.Fare ?? item.Cost ?? 0;
-          const fId = item.FlightId || item.SegmentId || tr.flightId || tr.FlightId;
-          return {
-            ...item,
+        const seenKeys = new Set();
+        const items = [];
+        flatItems.forEach((elem) => {
+          if (!elem) return;
+          const desc = elem.Description || elem.Desc || elem.name || elem.Title || elem.Text || (elem.Weight ? (typeof elem.Weight === 'number' ? `Additional ${elem.Weight} KG` : elem.Weight) : "") || elem.Code || "Extra Baggage";
+          const amt = elem.Amount ?? elem.amount ?? elem.Price ?? elem.price ?? elem.TotalAmount ?? elem.Fare ?? elem.Cost ?? 0;
+          const fId = elem.FlightId || elem.SegmentId || tr.flightId || tr.FlightId;
+          const mapped = {
+            ...elem,
             Description: desc,
             Amount: amt,
             tripIndex: tIdx,
             TripType: tIdx,
             FlightId: fId,
             SegmentId: fId,
-            Sector: sectorKey || item.Sector || "",
+            Sector: sectorKey || elem.Sector || "",
             sectorLabel: route || title,
           };
+          const key = getItemId(mapped);
+          if (key && !seenKeys.has(key)) {
+            seenKeys.add(key);
+            items.push(mapped);
+          }
         });
 
         return {
@@ -100,11 +123,16 @@ export default function BaggageModal({
             route: routeLabel || "",
             sectorKey: item.Sector || "",
             items: [],
+            seen: new Set(),
           };
         }
-        grouped[grpKey].items.push(item);
+        const key = getItemId(item);
+        if (key && !grouped[grpKey].seen.has(key)) {
+          grouped[grpKey].seen.add(key);
+          grouped[grpKey].items.push(item);
+        }
       });
-      return Object.values(grouped);
+      return Object.values(grouped).map(({ seen, ...rest }) => rest);
     }
 
     return [{
@@ -119,13 +147,15 @@ export default function BaggageModal({
   const [activeTripIdx, setActiveTripIdx] = useState(0);
   const [selectedItems, setSelectedItems] = useState(initialSelectedBaggage || []);
 
-  const getItemId = (item) => item.SSRKey || item.Code || item.Description || item.Desc || (item.Weight ? String(item.Weight) : '') || JSON.stringify(item);
-
   // Check if baggage is selected for a specific trip
   const isItemSelected = (item, tripIdx) => {
     const id = getItemId(item);
     return selectedItems.some(
-      (s) => (s.tripIndex !== undefined ? Number(s.tripIndex) : 0) === tripIdx && getItemId(s) === id
+      (s) => (s.tripIndex !== undefined ? Number(s.tripIndex) : 0) === tripIdx && (
+        getItemId(s) === id ||
+        (s.SSRKey && item.SSRKey && s.SSRKey === item.SSRKey) ||
+        (s.Code && item.Code && String(s.Code).trim().toUpperCase() === String(item.Code).trim().toUpperCase())
+      )
     );
   };
 
@@ -137,7 +167,11 @@ export default function BaggageModal({
     if (isAlready) {
       // Deselect for this trip
       setSelectedItems((prev) =>
-        prev.filter((s) => !((s.tripIndex !== undefined ? Number(s.tripIndex) : 0) === tripIdx && getItemId(s) === id))
+        prev.filter((s) => {
+          const isSameTrip = (s.tripIndex !== undefined ? Number(s.tripIndex) : 0) === tripIdx;
+          if (!isSameTrip) return true;
+          return getItemId(s) !== id && s.SSRKey !== item.SSRKey && s.Code !== item.Code;
+        })
       );
     } else {
       // Replace existing baggage for this trip (connecting flights share the same departure baggage)

@@ -21,6 +21,21 @@ export default function MealModal({
     };
   }, []);
 
+  const getItemId = (item) => {
+    if (!item) return "";
+    const code = item.Code ? String(item.Code).trim().toUpperCase() : "";
+    const amt = item.Amount ?? item.amount ?? item.Price ?? item.price ?? item.TotalAmount ?? item.Fare ?? item.Cost;
+    const amtStr = (amt !== undefined && amt !== null) ? String(amt) : "";
+    const desc = (item.Description || item.Desc || item.name || item.Title || item.Text || "").trim().toLowerCase();
+
+    if (code && amtStr) return `${code}_${amtStr}`;
+    if (desc && amtStr) return `${desc}_${amtStr}`;
+    if (code && desc) return `${code}_${desc}`;
+    if (code) return code;
+    if (desc) return desc;
+    return item.SSRKey || JSON.stringify(item);
+  };
+
   // Normalize segments: if segments array is provided with per-segment mealList, use it;
   // otherwise build from mealList array
   const normalizedSegments = React.useMemo(() => {
@@ -42,20 +57,28 @@ export default function MealModal({
           return [elem];
         });
 
-        const items = flatMeals.map((item) => {
-          const desc = item.Description || item.Desc || item.name || item.Title || item.Text || item.Code || "Meal Option";
-          const amt = item.Amount ?? item.amount ?? item.Price ?? item.price ?? item.TotalAmount ?? 0;
-          return {
-            ...item,
+        const seenKeys = new Set();
+        const items = [];
+        flatMeals.forEach((elem) => {
+          if (!elem) return;
+          const desc = elem.Description || elem.Desc || elem.name || elem.Title || elem.Text || elem.Code || "Meal Option";
+          const amt = elem.Amount ?? elem.amount ?? elem.Price ?? elem.price ?? elem.TotalAmount ?? 0;
+          const mapped = {
+            ...elem,
             Description: desc,
             Amount: amt,
             segmentIndex: sIdx,
-            SegmentId: item.SegmentId ?? item.segmentId ?? seg.FlightId ?? seg.SegmentId ?? sIdx,
-            FlightId: item.FlightId ?? item.flightId ?? seg.FlightId ?? seg.SegmentId ?? sIdx,
+            SegmentId: elem.SegmentId ?? elem.segmentId ?? seg.FlightId ?? seg.SegmentId ?? sIdx,
+            FlightId: elem.FlightId ?? elem.flightId ?? seg.FlightId ?? seg.SegmentId ?? sIdx,
             Sector: sectorKey,
             sectorLabel,
             TripType: seg.tripIndex ?? 0,
           };
+          const key = getItemId(mapped);
+          if (key && !seenKeys.has(key)) {
+            seenKeys.add(key);
+            items.push(mapped);
+          }
         });
 
         return {
@@ -101,11 +124,16 @@ export default function MealModal({
             sectorLabel: item.sectorLabel || routeLabel || `Flight ${grpKey + 1}`,
             sectorKey: item.Sector || "",
             items: [],
+            seen: new Set(),
           };
         }
-        grouped[grpKey].items.push(item);
+        const key = getItemId(item);
+        if (key && !grouped[grpKey].seen.has(key)) {
+          grouped[grpKey].seen.add(key);
+          grouped[grpKey].items.push(item);
+        }
       });
-      return Object.values(grouped);
+      return Object.values(grouped).map(({ seen, ...rest }) => rest);
     }
 
     return [{
@@ -120,13 +148,15 @@ export default function MealModal({
   const [activeSegIdx, setActiveSegIdx] = useState(0);
   const [selectedItems, setSelectedItems] = useState(initialSelectedMeals || []);
 
-  const getItemId = (item) => item.SSRKey || item.Code || item.Description || item.Desc || JSON.stringify(item);
-
   // Check if a specific meal is selected for a specific segment
   const isItemSelected = (item, segIdx) => {
     const id = getItemId(item);
     return selectedItems.some(
-      (s) => (s.segmentIndex !== undefined ? Number(s.segmentIndex) : 0) === segIdx && getItemId(s) === id
+      (s) => (s.segmentIndex !== undefined ? Number(s.segmentIndex) : 0) === segIdx && (
+        getItemId(s) === id ||
+        (s.SSRKey && item.SSRKey && s.SSRKey === item.SSRKey) ||
+        (s.Code && item.Code && String(s.Code).trim().toUpperCase() === String(item.Code).trim().toUpperCase())
+      )
     );
   };
 
@@ -138,7 +168,11 @@ export default function MealModal({
     if (isAlready) {
       // Deselect for this segment
       setSelectedItems((prev) =>
-        prev.filter((s) => !((s.segmentIndex !== undefined ? Number(s.segmentIndex) : 0) === segIdx && getItemId(s) === id))
+        prev.filter((s) => {
+          const isSameSeg = (s.segmentIndex !== undefined ? Number(s.segmentIndex) : 0) === segIdx;
+          if (!isSameSeg) return true;
+          return getItemId(s) !== id && s.SSRKey !== item.SSRKey && s.Code !== item.Code;
+        })
       );
     } else {
       // Replace any existing meal selection on this segment with the new one
