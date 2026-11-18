@@ -1,7 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import Select, { components } from "react-select";
-import { DayPicker } from "react-day-picker";
-import "react-day-picker/dist/style.css";
+import CustomFlightCalendar from '@/components/common/CustomFlightCalendar';
 import { format, parse, isValid } from "date-fns";
 import { X } from 'lucide-react';
 import { useQuery } from "@tanstack/react-query";
@@ -624,8 +623,15 @@ function FlightSearchHeaderMobile({ open, onClose }) {
                                     className="w-full text-sm font-semibold text-white border-b border-white focus:outline-none placeholder-white/80 py-1 px-0 cursor-pointer bg-transparent truncate"
                                 />
                                 {departOpen && (
-                                    <div className="absolute top-full left-0 mt-2 bg-white p-3 rounded-2xl shadow-xl z-50">
-                                        <DayPicker mode="single" selected={departSelected} onSelect={handleDepartSelect} disabled={{ before: new Date(), after: flightSearchInfo.return || undefined }} numberOfMonths={1} captionLayout="dropdown-buttons" className="text-gray-800" />
+                                    <div className="absolute top-full left-0 mt-2 z-50">
+                                        <CustomFlightCalendar
+                                            selected={departSelected}
+                                            startDate={departSelected}
+                                            endDate={flightSearchInfo.return}
+                                            onSelect={handleDepartSelect}
+                                            disabled={{ before: new Date(), after: flightSearchInfo.return || undefined }}
+                                            numberOfMonths={1}
+                                        />
                                     </div>
                                 )}
                             </div>
@@ -652,8 +658,15 @@ function FlightSearchHeaderMobile({ open, onClose }) {
                                         className="w-full text-sm font-semibold text-white border-b border-white focus:outline-none placeholder-white/80 py-1 px-0 cursor-pointer bg-transparent truncate"
                                     />
                                     {returnOpen && (
-                                        <div className="absolute top-full right-0 mt-2 bg-white p-3 rounded-2xl shadow-xl z-50">
-                                            <DayPicker mode="single" selected={flightSearchInfo.return} onSelect={handleReturnSelect} disabled={{ before: departSelected || new Date() }} numberOfMonths={1} captionLayout="dropdown-buttons" className="text-gray-800" />
+                                        <div className="absolute top-full right-0 mt-2 z-50">
+                                            <CustomFlightCalendar
+                                                selected={flightSearchInfo.return}
+                                                startDate={departSelected}
+                                                endDate={flightSearchInfo.return}
+                                                onSelect={handleReturnSelect}
+                                                disabled={{ before: departSelected || new Date() }}
+                                                numberOfMonths={1}
+                                            />
                                         </div>
                                     )}
                                 </div>
@@ -716,13 +729,12 @@ function FlightSearchHeaderMobile({ open, onClose }) {
                                                                     key={i}
                                                                     onClick={() => !isInfantDisabled && handleInfantsChange(i)}
                                                                     title={isInfantDisabled ? "Number of infants cannot exceed number of adults" : undefined}
-                                                                    className={`px-2 py-1 text-xs border-r last:border-r-0 transition-colors ${
-                                                                        isSelected
-                                                                            ? 'bg-[#78080B] text-white font-medium'
-                                                                            : isInfantDisabled
+                                                                    className={`px-2 py-1 text-xs border-r last:border-r-0 transition-colors ${isSelected
+                                                                        ? 'bg-[#78080B] text-white font-medium'
+                                                                        : isInfantDisabled
                                                                             ? 'opacity-30 cursor-not-allowed bg-gray-100 text-gray-400 select-none'
                                                                             : 'cursor-pointer hover:bg-gray-100 text-gray-700'
-                                                                    }`}
+                                                                        }`}
                                                                 >
                                                                     {i}
                                                                 </div>
@@ -736,13 +748,12 @@ function FlightSearchHeaderMobile({ open, onClose }) {
                                                             <div
                                                                 onClick={() => !isMoreThan6Disabled && handleInfantsChange('>6')}
                                                                 title={isMoreThan6Disabled ? "Number of infants cannot exceed number of adults" : undefined}
-                                                                className={`px-2 py-1 text-xs border rounded-md transition-colors ${
-                                                                    isSelected
-                                                                        ? 'bg-[#78080B] text-white font-medium'
-                                                                        : isMoreThan6Disabled
+                                                                className={`px-2 py-1 text-xs border rounded-md transition-colors ${isSelected
+                                                                    ? 'bg-[#78080B] text-white font-medium'
+                                                                    : isMoreThan6Disabled
                                                                         ? 'opacity-30 cursor-not-allowed bg-gray-100 text-gray-400 select-none'
                                                                         : 'cursor-pointer hover:bg-gray-100 text-gray-700'
-                                                                }`}
+                                                                    }`}
                                                             >
                                                                 &gt;6
                                                             </div>

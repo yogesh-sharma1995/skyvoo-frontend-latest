@@ -1,3 +1,4 @@
+import React from 'react';
 import { Clock, Plane } from 'lucide-react';
 import { getAirlineLogo } from '@/utils/airlineCode';
 import { parseDateTime } from './mapBookingToTicket';
@@ -434,23 +435,20 @@ const FlightDetails = ({
                 )}
               </div>
 
-              {/* Segments Display: Show each segment with full data & layover indicators */}
-              <div>
-                {(trip.segments || []).map((seg, sIdx) => (
-                  <React.Fragment key={sIdx}>
-                    {sIdx > 0 && (
-                      <LayoverDivider
-                        prevSeg={trip.segments[sIdx - 1]}
-                        nextSeg={seg}
-                      />
-                    )}
+              {/* Segments Display: Connecting flight in one single row via ConnectingFlightRow, or SingleFlightSegment */}
+              {isConnecting ? (
+                <ConnectingFlightRow segments={trip.segments} />
+              ) : (
+                <div>
+                  {(trip.segments || []).map((seg, sIdx) => (
                     <SingleFlightSegment
+                      key={sIdx}
                       {...seg}
                       isLast={sIdx === trip.segments.length - 1}
                     />
-                  </React.Fragment>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
             </div>
           );
         })}
@@ -475,23 +473,20 @@ const FlightDetails = ({
         </div>
       </div>
 
-      {/* Flight Segments List: Show each segment with full data & layover indicators */}
-      <div>
-        {segmentList.map((seg, idx) => (
-          <React.Fragment key={idx}>
-            {idx > 0 && (
-              <LayoverDivider
-                prevSeg={segmentList[idx - 1]}
-                nextSeg={seg}
-              />
-            )}
+      {/* Flight Segments List: Show connecting in one row or single segment */}
+      {segmentList.length > 1 ? (
+        <ConnectingFlightRow segments={segmentList} />
+      ) : (
+        <div>
+          {segmentList.map((seg, idx) => (
             <SingleFlightSegment
+              key={idx}
               {...seg}
               isLast={idx === segmentList.length - 1}
             />
-          </React.Fragment>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 };

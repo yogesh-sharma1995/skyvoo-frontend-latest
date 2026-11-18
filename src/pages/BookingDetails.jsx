@@ -1287,61 +1287,22 @@ function BookingDetails() {
             {bookingTravellers.length > 0 && (() => {
               const allBookingSegments = [];
               tripInfos.forEach((trip, tIdx) => {
-                (trip.SegmentList || []).forEach((seg) => {
+                (trip.SegmentList || []).forEach((seg, sIdx) => {
                   const dC = seg.da?.code || seg.da?.cityCode || seg.da?.city || seg.da?.name || '';
                   const aC = seg.aa?.code || seg.aa?.cityCode || seg.aa?.city || seg.aa?.name || '';
                   allBookingSegments.push({
-                    FlightId: String(seg.FlightId || seg.flightId || seg.SegmentId || seg.segmentId || seg.sI || seg.id || ''),
-                    SegmentId: String(seg.SegmentId || seg.segmentId || seg.FlightId || seg.flightId || ''),
+                    FlightId: String(seg.FlightId ?? seg.flightId ?? seg.SegmentId ?? seg.segmentId ?? seg.sI ?? seg.id ?? ''),
+                    SegmentId: String(seg.SegmentId ?? seg.segmentId ?? seg.FlightId ?? seg.flightId ?? ''),
+                    sI: seg.sI !== undefined ? String(seg.sI) : '',
+                    id: seg.id !== undefined ? String(seg.id) : '',
                     depCode: dC,
                     arrCode: aC,
                     sectorStr: dC && aC ? `${dC} → ${aC}` : (dC || aC || ''),
                     tripIndex: tIdx,
+                    segmentIndex: sIdx,
                   });
                 });
               });
-
-              const resolveSsrSector = (secKey, sInfo, sIdx, isRawArray) => {
-                const infoKey = typeof sInfo === 'object' && sInfo !== null ? String(sInfo?.Key || sInfo?.SSRKey || sInfo?.FlightId || sInfo?.SegmentId || '') : '';
-                const infoSector = typeof sInfo === 'object' && sInfo !== null ? (sInfo?.Sector || sInfo?.sector || sInfo?.Segment || sInfo?.segment || '') : '';
-
-                const sectorCandidate = (secKey && typeof secKey === 'string' && secKey.includes('-'))
-                  ? secKey
-                  : (infoSector && typeof infoSector === 'string' && infoSector.includes('-') ? infoSector : '');
-
-                if (sectorCandidate) {
-                  const cleanSec = sectorCandidate.toUpperCase().replace(/\s+/g, '');
-                  const matched = allBookingSegments.find(
-                    (seg) => `${seg.depCode}-${seg.arrCode}`.toUpperCase() === cleanSec
-                  );
-                  if (matched) return matched.sectorStr;
-                  return sectorCandidate.replace('-', ' → ');
-                }
-
-                if (infoKey || secKey) {
-                  const keyToMatch = infoKey || secKey;
-                  const matched = allBookingSegments.find(
-                    (seg) =>
-                      (seg.FlightId && String(seg.FlightId) === String(keyToMatch)) ||
-                      (seg.SegmentId && String(seg.SegmentId) === String(keyToMatch))
-                  );
-                  if (matched) return matched.sectorStr;
-                }
-
-                if (!isRawArray && !isNaN(Number(secKey)) && Number(secKey) >= 0 && Number(secKey) < allBookingSegments.length) {
-                  const matched = allBookingSegments[Number(secKey)];
-                  if (matched) return matched.sectorStr;
-                }
-
-                if (typeof sInfo === 'object' && sInfo?.TripType !== undefined) {
-                  const tripIdx = Number(sInfo.TripType);
-                  const tripSegs = allBookingSegments.filter((seg) => seg.tripIndex === tripIdx);
-                  if (tripSegs.length === 1) return tripSegs[0].sectorStr;
-                  if (tripSegs.length > 0) return (tripSegs[sIdx] || tripSegs[0]).sectorStr;
-                }
-
-                return secKey;
-              };
 
               const isMultiTrip = tripInfos.length > 1;
               const tripsToRender = tripInfos.length > 0 ? tripInfos : [{ SegmentList: [] }];
@@ -1376,31 +1337,160 @@ function BookingDetails() {
                 if (depCode && arrCode) {
                   tripSectorKeys.push(`${depCode}-${arrCode}`.toUpperCase());
                 }
-                const tripFlightIds = tripSegments.map(seg => String(seg.FlightId || seg.flightId || seg.SegmentId || seg.segmentId || seg.sI || seg.id || ''));
-                const tripSegmentIds = tripSegments.map(seg => String(seg.SegmentId || seg.segmentId || seg.FlightId || seg.flightId || ''));
 
-                const isSsrForThisTrip = (secKey, sInfo, sIdx, isRawArray) => {
-                  if (!isMultiTrip) return true;
-                  if (typeof sInfo === 'object' && sInfo?.TripType !== undefined) {
-                    return Number(sInfo.TripType) === tIdx;
-                  }
-                  const infoKey = typeof sInfo === 'object' && sInfo !== null ? String(sInfo?.Key || sInfo?.SSRKey || sInfo?.FlightId || sInfo?.SegmentId || '') : '';
-                  const infoSector = typeof sInfo === 'object' && sInfo !== null ? (sInfo?.Sector || sInfo?.sector || sInfo?.Segment || sInfo?.segment || '') : '';
-                  const sectorCandidate = (secKey && typeof secKey === 'string' && secKey.includes('-'))
+                const otherTrips = tripsToRender.filter((_, idx) => idx !== tIdx);
+                const otherTripSectorKeys = otherTrips.flatMap(ot => {
+                  const segs = ot.SegmentList || [];
+                  const keys = segs.map(seg => {
+                    const d = seg.da?.code || seg.da?.cityCode || seg.da?.city || seg.da?.name || '';
+                    const a = seg.aa?.code || seg.aa?.cityCode || seg.aa?.city || seg.aa?.name || '';
+                    return `${d}-${a}`.toUpperCase();
+                  });
+                  const first = segs[0];
+                  const last = segs[segs.length - 1];
+                  const dC = first?.da?.code || first?.da?.cityCode || first?.da?.city || first?.da?.name || '';
+                  const aC = last?.aa?.code || last?.aa?.cityCode || last?.aa?.city || last?.aa?.name || '';
+                  if (dC && aC) keys.push(`${dC}-${aC}`.toUpperCase());
+                  return keys;
+                });
+
+                const tripFlightIds = [
+                  ...tripSegments.map(seg => String(seg.FlightId ?? seg.flightId ?? '')),
+                  ...tripSegments.map(seg => String(seg.SegmentId ?? seg.segmentId ?? '')),
+                  ...tripSegments.map(seg => String(seg.sI ?? '')),
+                  ...tripSegments.map(seg => String(seg.id ?? '')),
+                  String(trip.FlightId ?? trip.flightId ?? ''),
+                ].map(s => s.trim()).filter(Boolean);
+
+                const tripSegmentIds = [
+                  ...tripSegments.map(seg => String(seg.SegmentId ?? seg.segmentId ?? '')),
+                  String(trip.SegmentId ?? trip.segmentId ?? ''),
+                ].map(s => s.trim()).filter(Boolean);
+
+                const otherTripFlightIds = otherTrips.flatMap(ot => {
+                  const segs = ot.SegmentList || [];
+                  return [
+                    ...segs.map(seg => String(seg.FlightId ?? seg.flightId ?? '')),
+                    ...segs.map(seg => String(seg.SegmentId ?? seg.segmentId ?? '')),
+                    ...segs.map(seg => String(seg.sI ?? '')),
+                    ...segs.map(seg => String(seg.id ?? '')),
+                    String(ot.FlightId ?? ot.flightId ?? ''),
+                  ].map(s => s.trim()).filter(Boolean);
+                });
+
+                const otherTripSegmentIds = otherTrips.flatMap(ot => {
+                  const segs = ot.SegmentList || [];
+                  return [
+                    ...segs.map(seg => String(seg.SegmentId ?? seg.segmentId ?? '')),
+                    String(ot.SegmentId ?? ot.segmentId ?? ''),
+                  ].map(s => s.trim()).filter(Boolean);
+                });
+
+                const resolveSsrSector = (secKey, sInfo, sIdx, isRawArray) => {
+                  const infoKey = typeof sInfo === 'object' && sInfo !== null && !String(sInfo?.Key || '').startsWith('0N') && String(sInfo?.Key || '').length < 30 ? String(sInfo.Key) : '';
+                  const infoSector = typeof sInfo === 'object' && sInfo !== null ? (sInfo?.Sector || sInfo?.sector || sInfo?.Segment || sInfo?.segment || sInfo?.route || sInfo?.sectorLabel || '') : '';
+
+                  const sectorCandidate = (secKey && typeof secKey === 'string' && (secKey.includes('-') || secKey.includes('→')))
                     ? secKey
-                    : (infoSector && typeof infoSector === 'string' && infoSector.includes('-') ? infoSector : '');
+                    : (infoSector && typeof infoSector === 'string' && (infoSector.includes('-') || infoSector.includes('→')) ? infoSector : '');
 
                   if (sectorCandidate) {
-                    const cleanSec = sectorCandidate.toUpperCase().replace(/\s+/g, '');
-                    return tripSectorKeys.some(sk => sk === cleanSec || sk.replace('-', '') === cleanSec.replace('-', ''));
+                    const cleanSec = sectorCandidate.toUpperCase().replace(/\s+/g, '').replace('→', '-');
+                    const matched = allBookingSegments.find(
+                      (seg) => `${seg.depCode}-${seg.arrCode}`.toUpperCase() === cleanSec
+                    );
+                    if (matched) return matched.sectorStr;
+                    return sectorCandidate.replace('-', ' → ');
                   }
-                  if (infoKey || secKey) {
-                    const keyToMatch = String(infoKey || secKey);
-                    return tripFlightIds.filter(Boolean).includes(keyToMatch) || tripSegmentIds.filter(Boolean).includes(keyToMatch);
+
+                  if (infoKey || (!isRawArray && secKey && !isNaN(Number(secKey)))) {
+                    const keyToMatch = infoKey || secKey;
+                    const matched = allBookingSegments.find(
+                      (seg) =>
+                        (seg.FlightId && String(seg.FlightId) === String(keyToMatch)) ||
+                        (seg.SegmentId && String(seg.SegmentId) === String(keyToMatch)) ||
+                        (seg.sI && String(seg.sI) === String(keyToMatch)) ||
+                        (seg.id && String(seg.id) === String(keyToMatch))
+                    );
+                    if (matched) return matched.sectorStr;
                   }
+
+                  if (!isRawArray && !isNaN(Number(secKey)) && Number(secKey) >= 0 && Number(secKey) < allBookingSegments.length) {
+                    const matched = allBookingSegments[Number(secKey)];
+                    if (matched) return matched.sectorStr;
+                  }
+
+                  if (typeof sInfo === 'object' && sInfo?.TripType !== undefined && sInfo?.TripType !== null) {
+                    const tripIdx = Number(sInfo.TripType);
+                    const tripSegs = allBookingSegments.filter((seg) => seg.tripIndex === tripIdx);
+                    if (tripSegs.length === 1) return tripSegs[0].sectorStr;
+                    if (tripSegs.length > 0) return (tripSegs[sIdx] || tripSegs[0]).sectorStr;
+                  }
+
+                  if (tripRouteBadge) {
+                    return tripRouteBadge;
+                  }
+
+                  return depCode && arrCode ? `${depCode} → ${arrCode}` : (secKey || "Flight");
+                };
+
+                const isSsrForThisTrip = (secKey, sInfo, sIdx, isRawArray, totalCount = 1) => {
+                  if (!isMultiTrip) return true;
+
+                  // 1. Sector matching (highest priority for route-specific add-ons)
+                  const infoSector = typeof sInfo === 'object' && sInfo !== null
+                    ? (sInfo?.Sector || sInfo?.sector || sInfo?.Segment || sInfo?.segment || sInfo?.route || sInfo?.sectorLabel || '')
+                    : '';
+                  const sectorCandidate = (secKey && typeof secKey === 'string' && (secKey.includes('-') || secKey.includes('→')))
+                    ? secKey
+                    : (infoSector && typeof infoSector === 'string' && (infoSector.includes('-') || infoSector.includes('→')) ? infoSector : '');
+
+                  if (sectorCandidate) {
+                    const cleanSec = sectorCandidate.toUpperCase().replace(/\s+/g, '').replace('→', '-');
+                    const matchesThisTrip = tripSectorKeys.some(sk => sk === cleanSec || sk.replace('-', '') === cleanSec.replace('-', ''));
+                    if (matchesThisTrip) return true;
+                    const matchesOtherTrip = otherTripSectorKeys.some(sk => sk === cleanSec || sk.replace('-', '') === cleanSec.replace('-', ''));
+                    if (matchesOtherTrip) return false;
+                  }
+
+                  // 2. Explicit return flag
+                  if (typeof sInfo === 'object' && sInfo !== null) {
+                    if (sInfo.isReturn === true || sInfo.isReturnTrip === true) {
+                      return tIdx > 0;
+                    }
+                    if (sInfo.isReturn === false || sInfo.isReturnTrip === false) {
+                      return tIdx === 0;
+                    }
+                  }
+
+                  // 3. Explicit tripIndex
+                  if (typeof sInfo === 'object' && sInfo !== null && sInfo.tripIndex !== undefined && sInfo.tripIndex !== null) {
+                    return Number(sInfo.tripIndex) === tIdx;
+                  }
+
+                  // 4. TripType check when multiple SSR items exist
+                  if (totalCount > 1 && typeof sInfo === 'object' && sInfo !== null && sInfo.TripType !== undefined && sInfo.TripType !== null) {
+                    return Number(sInfo.TripType) === tIdx;
+                  }
+
+                  // 5. Key / FlightId / SegmentId match (exclude long SSRKey tokens)
+                  const rawKey = typeof sInfo === 'object' && sInfo !== null
+                    ? (sInfo.FlightId || sInfo.flightId || sInfo.SegmentId || sInfo.segmentId || (!String(sInfo.Key || '').startsWith('0N') && String(sInfo.Key || '').length < 30 ? sInfo.Key : ''))
+                    : (!isRawArray && secKey && !secKey.includes('-') && secKey.length < 30 ? secKey : '');
+
+                  if (rawKey && String(rawKey).trim() !== '') {
+                    const keyToMatch = String(rawKey).trim();
+                    const matchesThis = tripFlightIds.includes(keyToMatch) || tripSegmentIds.includes(keyToMatch);
+                    const matchesOther = otherTripFlightIds.includes(keyToMatch) || otherTripSegmentIds.includes(keyToMatch);
+                    if (matchesThis && !matchesOther) return true;
+                    if (matchesOther && !matchesThis) return false;
+                  }
+
+                  // 6. Object numeric key index matching
                   if (!isRawArray && !isNaN(Number(secKey)) && Number(secKey) >= 0 && Number(secKey) < allBookingSegments.length) {
                     return allBookingSegments[Number(secKey)].tripIndex === tIdx;
                   }
+
                   return false;
                 };
 
@@ -1443,9 +1533,9 @@ function BookingDetails() {
                         const isBaggageRawArray = Array.isArray(baggageRaw);
                         const isMealRawArray = Array.isArray(mealRaw);
 
-                        const tripSeats = seatMap.filter(([sector, sInfo], sIdx) => isSsrForThisTrip(sector, sInfo, sIdx, isSeatRawArray));
-                        const tripBaggage = baggageMap.filter(([sector, bInfo], bIdx) => isSsrForThisTrip(sector, bInfo, bIdx, isBaggageRawArray));
-                        const tripMeals = mealMap.filter(([sector, mInfo], mIdx) => isSsrForThisTrip(sector, mInfo, mIdx, isMealRawArray));
+                        const tripSeats = seatMap.filter(([sector, sInfo], sIdx) => isSsrForThisTrip(sector, sInfo, sIdx, isSeatRawArray, seatMap.length));
+                        const tripBaggage = baggageMap.filter(([sector, bInfo], bIdx) => isSsrForThisTrip(sector, bInfo, bIdx, isBaggageRawArray, baggageMap.length));
+                        const tripMeals = mealMap.filter(([sector, mInfo], mIdx) => isSsrForThisTrip(sector, mInfo, mIdx, isMealRawArray, mealMap.length));
 
                         // Standard trip baggage
                         const stdBaggage = resolveStandardBaggage(trip, trav);
@@ -1536,7 +1626,11 @@ function BookingDetails() {
                                 <div className="mt-1 space-y-1">
                                   <div className="text-xs text-slate-700 flex items-center justify-between">
                                     <span className="text-slate-500 font-medium">Included:</span>
-                                    <span className="font-semibold text-slate-800">{standardCheckIn} Check-in, {standardCabin} Cabin</span>
+                                    <span className="font-semibold text-slate-800">
+                                      {standardCheckIn && standardCabin
+                                        ? `${standardCheckIn} Check-in, ${standardCabin} Cabin`
+                                        : (standardCheckIn ? `${standardCheckIn} Check-in` : (standardCabin ? `${standardCabin} Cabin` : '—'))}
+                                    </span>
                                   </div>
 
                                   {tripBaggage.length > 0 && (

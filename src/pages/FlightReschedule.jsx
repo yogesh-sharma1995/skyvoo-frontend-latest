@@ -1,9 +1,8 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { Plane, Clock, MapPin, Check } from "lucide-react";
-import { DayPicker } from "react-day-picker";
+import CustomFlightCalendar from '@/components/common/CustomFlightCalendar';
 import { addDays, startOfToday } from "date-fns";
 import Header from '@/components/layout/Header';
-import "react-day-picker/dist/style.css";
 import GrayFadedBg from '@/assets/imgs/grayfadedbg.webp';
 
 export default function Reschedule() {
@@ -211,9 +210,8 @@ export default function Reschedule() {
                                 </div>
 
                                 {isDepartPickerOpen && selectedDay && (
-                                    <div className="absolute top-full mb-2 bg-white p-4 rounded-2xl shadow-lg z-50">
-                                        <DayPicker
-                                            mode="single"
+                                    <div className="absolute top-full mb-2 z-50">
+                                        <CustomFlightCalendar
                                             selected={selectedDay}
                                             onSelect={(day) => {
                                                 if (day) {
@@ -222,17 +220,13 @@ export default function Reschedule() {
                                                 }
                                             }}
                                             numberOfMonths={2}
-                                            captionLayout="dropdown-buttons"
-                                            className="text-gray-800"
-                                            classNames={{ months: "flex gap-4" }}
+                                            minDate={today}
+                                            maxDate={maxRescheduleDate}
                                             disabled={{
                                                 before: today,
                                                 after: maxRescheduleDate,
                                             }}
-                                            fromMonth={today}
-                                            toMonth={maxRescheduleDate}
                                         />
-
                                     </div>
                                 )}
                             </div>

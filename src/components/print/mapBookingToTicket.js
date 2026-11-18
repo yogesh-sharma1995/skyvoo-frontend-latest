@@ -242,11 +242,12 @@ export const resolveStandardBaggage = (trip, trav) => {
     }
   }
 
-  const rawIb = bI?.iB !== undefined && bI?.iB !== null ? String(bI.iB).trim() : (paxType === 'INFANT' ? '0' : '15');
-  const rawCb = bI?.cB !== undefined && bI?.cB !== null ? String(bI.cB).trim() : (paxType === 'INFANT' ? '0' : '7');
+  const rawIb = bI?.iB !== undefined && bI?.iB !== null ? String(bI.iB).trim() : (paxType === 'INFANT' ? '0' : '');
+  const rawCb = bI?.cB !== undefined && bI?.cB !== null ? String(bI.cB).trim() : (paxType === 'INFANT' ? '0' : '');
 
   const formatBaggage = (val) => {
-    if (!val || val === '0') return '0 Kg';
+    if (!val || val === '') return paxType === 'INFANT' ? '0 Kg' : '';
+    if (val === '0') return '0 Kg';
     let cleanVal = String(val).trim();
     if (cleanVal.includes('|')) {
       const parts = cleanVal.split('|').map((s) => s.trim()).filter(Boolean);
@@ -561,7 +562,32 @@ export function mapBookingDetailToTicket(bookingData, loggedInUser = null, print
   };
 
   // ─── 2. Passenger Details ───────────────────────────────────────────────────
-  const isMultiTrip = tripInfos.length > 1;
+  const segList0 = tripInfos[0]?.SegmentList || [];
+  const hasReturnSegment = segList0.some((s) => {
+    return s.isRs === true || s.isRs === 'true' || s.isRs === 1 || s.IsRs === true || s.IsRs === 'true' ||
+      s.isReturn === true || s.isReturn === 'true' || s.IsReturn === true || s.IsReturn === 'true' ||
+      s.tripId === 1 || s.TripId === 1 || s.Trip_Id === 1 || s.sN === 1 || s.SN === 1;
+  });
+  const hasSpecialRoundTrip = tripInfos.length === 1 && hasReturnSegment;
+  const isMultiTrip = tripInfos.length > 1 || hasSpecialRoundTrip;
+
+  const specialOnwardSegments = hasSpecialRoundTrip
+    ? segList0.filter(s => !(s.isRs === true || s.isRs === 'true' || s.isRs === 1 || s.IsRs === true || s.IsRs === 'true' || s.isReturn === true || s.isReturn === 'true' || s.IsReturn === true || s.IsReturn === 'true' || s.tripId === 1 || s.TripId === 1 || s.Trip_Id === 1 || s.sN === 1 || s.SN === 1))
+    : segList0;
+  const specialReturnSegments = hasSpecialRoundTrip
+    ? segList0.filter(s => (s.isRs === true || s.isRs === 'true' || s.isRs === 1 || s.IsRs === true || s.IsRs === 'true' || s.isReturn === true || s.isReturn === 'true' || s.IsReturn === true || s.IsReturn === 'true' || s.tripId === 1 || s.TripId === 1 || s.Trip_Id === 1 || s.sN === 1 || s.SN === 1))
+    : [];
+
+  const departureTrip = tripInfos[0]
+    ? (hasSpecialRoundTrip ? { ...tripInfos[0], SegmentList: specialOnwardSegments, title: 'Departure Flight' } : tripInfos[0])
+    : {};
+  const returnTrip = tripInfos.length > 1
+    ? tripInfos[1]
+    : (hasSpecialRoundTrip ? { ...tripInfos[0], SegmentList: specialReturnSegments, title: 'Return Flight' } : null);
+
+  const effectiveTrips = (tripInfos.length > 1 || !hasSpecialRoundTrip)
+    ? tripInfos
+    : [departureTrip, returnTrip].filter(Boolean);
 
   // Helper to resolve PNR strictly for a specific trip/segment and passenger from API response
   const resolvePassengerTripPnr = (t, trip, tIdx, seg = null) => {
@@ -593,7 +619,7 @@ export function mapBookingDetailToTicket(bookingData, loggedInUser = null, print
     }
 
     // For single-trip (one-way) bookings, allow global PNR fallback if present
-    if (tripInfos.length === 1) {
+    if (tripInfos.length === 1 && !hasSpecialRoundTrip) {
       if (t?.PnrDetails && typeof t.PnrDetails === 'object') {
         const firstVal = Object.values(t.PnrDetails)[0];
         if (firstVal) return String(firstVal).trim();
@@ -616,8 +642,8 @@ export function mapBookingDetailToTicket(bookingData, loggedInUser = null, print
     return airlineCode || fNo || '';
   };
 
-  const outboundFlightNo = (tripInfos[0]?.SegmentList || []).map(formatSegmentFlightNo).filter(Boolean).join(' / ');
-  const returnFlightNo = (tripInfos[1]?.SegmentList || []).map(formatSegmentFlightNo).filter(Boolean).join(' / ');
+  const outboundFlightNo = (departureTrip?.SegmentList || []).map(formatSegmentFlightNo).filter(Boolean).join(' / ');
+  const returnFlightNo = (returnTrip?.SegmentList || []).map(formatSegmentFlightNo).filter(Boolean).join(' / ');
 
   // Helper to format passenger type e.g. "Adult", "Child (9 yrs)", "Infant"
   const formatPaxType = (trav) => {
@@ -649,7 +675,7 @@ export function mapBookingDetailToTicket(bookingData, loggedInUser = null, print
   };
 
   const allBookingSegments = [];
-  tripInfos.forEach((t, tIdx) => {
+  effectiveTrips.forEach((t, tIdx) => {
     (t.SegmentList || []).forEach((seg) => {
       const dC = seg.da?.code || seg.da?.cityCode || seg.da?.city || seg.da?.name || '';
       const aC = seg.aa?.code || seg.aa?.cityCode || seg.aa?.city || seg.aa?.name || '';
@@ -664,18 +690,108 @@ export function mapBookingDetailToTicket(bookingData, loggedInUser = null, print
     });
   });
 
-  // Helper to extract passenger meal descriptions
-  const extractPassengerMeals = (trav) => {
+  // Helper to extract passenger meal descriptions for a specific trip
+  const extractTripMeals = (trav, trip, tripIdx = 0) => {
+    if (!trav) return '—';
     const mealRaw = trav.ssrMealInfos || trav.SSRMealInfos || {};
     const mealEntries = typeof mealRaw === 'object' && mealRaw !== null ? Object.entries(mealRaw) : [];
+    const isRawArray = Array.isArray(mealRaw);
+
     if (mealEntries.length === 0) {
-      if (trav.Meal || trav.meal || trav.MealType) {
+      if (tripIdx === 0 && (trav.Meal || trav.meal || trav.MealType)) {
         return String(trav.Meal || trav.meal || trav.MealType).trim();
       }
       return '—';
     }
 
-    const mealDescriptions = mealEntries.map(([, mInfo]) => {
+    const segments = trip?.SegmentList || [];
+    const tripSectorKeys = segments.map((s) => {
+      const d = s.da?.code || s.da?.cityCode || s.da?.city || s.da?.name || '';
+      const a = s.aa?.code || s.aa?.cityCode || s.aa?.city || s.aa?.name || '';
+      return `${d}-${a}`.toUpperCase();
+    });
+    const firstSeg = segments[0];
+    const lastSeg = segments[segments.length - 1];
+    const depCode = firstSeg?.da?.code || firstSeg?.da?.cityCode || firstSeg?.da?.city || firstSeg?.da?.name || '';
+    const arrCode = lastSeg?.aa?.code || lastSeg?.aa?.cityCode || lastSeg?.aa?.city || lastSeg?.aa?.name || '';
+    if (depCode && arrCode) {
+      tripSectorKeys.push(`${depCode}-${arrCode}`.toUpperCase());
+    }
+
+    const tripFlightIds = [
+      ...segments.map((s) => String(s.FlightId || s.flightId || s.SegmentId || s.segmentId || s.sI || s.id || '')),
+      String(trip?.FlightId || trip?.flightId || '')
+    ].filter(Boolean);
+
+    const tripSegmentIds = [
+      ...segments.map((s) => String(s.SegmentId || s.segmentId || s.FlightId || s.flightId || '')),
+      String(trip?.SegmentId || trip?.segmentId || '')
+    ].filter(Boolean);
+
+    const otherTrips = (effectiveTrips || []).filter((_, idx) => idx !== tripIdx);
+    const otherTripSectorKeys = otherTrips.flatMap(ot => {
+      const segs = ot?.SegmentList || [];
+      const keys = segs.map(seg => {
+        const d = seg.da?.code || seg.da?.cityCode || seg.da?.city || seg.da?.name || '';
+        const a = seg.aa?.code || seg.aa?.cityCode || seg.aa?.city || seg.aa?.name || '';
+        return `${d}-${a}`.toUpperCase();
+      });
+      const first = segs[0];
+      const last = segs[segs.length - 1];
+      const dC = first?.da?.code || first?.da?.cityCode || first?.da?.city || first?.da?.name || '';
+      const aC = last?.aa?.code || last?.aa?.cityCode || last?.aa?.city || last?.aa?.name || '';
+      if (dC && aC) keys.push(`${dC}-${aC}`.toUpperCase());
+      return keys;
+    });
+
+    const tripMeals = mealEntries.filter(([secKey, mInfo], mIdx) => {
+      const infoSector = typeof mInfo === 'object' && mInfo !== null ? (mInfo?.Sector || mInfo?.sector || mInfo?.Segment || mInfo?.segment || mInfo?.route || '') : '';
+      const sectorCandidate = (secKey && typeof secKey === 'string' && (secKey.includes('-') || secKey.includes('→')))
+        ? secKey
+        : (infoSector && typeof infoSector === 'string' && (infoSector.includes('-') || infoSector.includes('→')) ? infoSector : '');
+
+      if (sectorCandidate) {
+        const cleanSec = sectorCandidate.toUpperCase().replace(/\s+/g, '').replace('→', '-');
+        if (tripSectorKeys.some((sk) => sk === cleanSec || sk.replace('-', '') === cleanSec.replace('-', ''))) {
+          return true;
+        }
+        if (otherTripSectorKeys.some((sk) => sk === cleanSec || sk.replace('-', '') === cleanSec.replace('-', ''))) {
+          return false;
+        }
+      }
+
+      if (typeof mInfo === 'object' && mInfo?.tripIndex !== undefined && mInfo?.tripIndex !== null) {
+        return Number(mInfo.tripIndex) === tripIdx;
+      }
+      if (typeof mInfo === 'object' && mInfo?.isReturn !== undefined) {
+        return mInfo.isReturn ? tripIdx > 0 : tripIdx === 0;
+      }
+      if (mealEntries.length > 1 && typeof mInfo === 'object' && mInfo?.TripType !== undefined) {
+        return Number(mInfo.TripType) === tripIdx;
+      }
+
+      const rawKey = typeof mInfo === 'object' && mInfo !== null
+        ? (mInfo.FlightId || mInfo.flightId || mInfo.SegmentId || mInfo.segmentId || (!String(mInfo.Key || '').startsWith('0N') && String(mInfo.Key || '').length < 30 ? mInfo.Key : ''))
+        : (!isRawArray && secKey && !secKey.includes('-') && secKey.length < 30 ? secKey : '');
+
+      if (rawKey && String(rawKey).trim() !== '') {
+        const keyToMatch = String(rawKey).trim();
+        if (tripFlightIds.includes(keyToMatch) || tripSegmentIds.includes(keyToMatch)) {
+          return true;
+        }
+      }
+
+      if (!isRawArray && !isNaN(Number(secKey)) && Number(secKey) >= 0 && Number(secKey) < allBookingSegments.length) {
+        return allBookingSegments[Number(secKey)].tripIndex === tripIdx;
+      }
+
+      if (!isMultiTrip) {
+        return true;
+      }
+      return false;
+    });
+
+    const mealDescriptions = tripMeals.map(([, mInfo]) => {
       const desc = typeof mInfo === 'object'
         ? (mInfo?.Description || mInfo?.Code || mInfo?.MealName || mInfo?.SSR_TypeName)
         : mInfo;
@@ -687,15 +803,103 @@ export function mapBookingDetailToTicket(bookingData, loggedInUser = null, print
     return uniqueMeals.length > 0 ? uniqueMeals.join(' / ') : '—';
   };
 
-  // Helper to extract passenger baggage details
-  const extractPassengerBaggage = (trav, trip) => {
+  // Helper to extract passenger baggage details for a specific trip
+  const extractTripBaggage = (trav, trip, tripIdx = 0) => {
     const stdBaggage = resolveStandardBaggage(trip, trav);
-    const baggageRaw = trav.ssrBaggageInfos || trav.SSRBaggageInfos || {};
+    const baggageRaw = trav?.ssrBaggageInfos || trav?.SSRBaggageInfos || {};
     const baggageEntries = typeof baggageRaw === 'object' && baggageRaw !== null ? Object.entries(baggageRaw) : [];
+    const isRawArray = Array.isArray(baggageRaw);
+
+    const segments = trip?.SegmentList || [];
+    const tripSectorKeys = segments.map((s) => {
+      const d = s.da?.code || s.da?.cityCode || s.da?.city || s.da?.name || '';
+      const a = s.aa?.code || s.aa?.cityCode || s.aa?.city || s.aa?.name || '';
+      return `${d}-${a}`.toUpperCase();
+    });
+    const firstSeg = segments[0];
+    const lastSeg = segments[segments.length - 1];
+    const depCode = firstSeg?.da?.code || firstSeg?.da?.cityCode || firstSeg?.da?.city || firstSeg?.da?.name || '';
+    const arrCode = lastSeg?.aa?.code || lastSeg?.aa?.cityCode || lastSeg?.aa?.city || lastSeg?.aa?.name || '';
+    if (depCode && arrCode) {
+      tripSectorKeys.push(`${depCode}-${arrCode}`.toUpperCase());
+    }
+
+    const otherTrips = (effectiveTrips || []).filter((_, idx) => idx !== tripIdx);
+    const otherTripSectorKeys = otherTrips.flatMap(ot => {
+      const segs = ot?.SegmentList || [];
+      const keys = segs.map(seg => {
+        const d = seg.da?.code || seg.da?.cityCode || seg.da?.city || seg.da?.name || '';
+        const a = seg.aa?.code || seg.aa?.cityCode || seg.aa?.city || seg.aa?.name || '';
+        return `${d}-${a}`.toUpperCase();
+      });
+      const first = segs[0];
+      const last = segs[segs.length - 1];
+      const dC = first?.da?.code || first?.da?.cityCode || first?.da?.city || first?.da?.name || '';
+      const aC = last?.aa?.code || last?.aa?.cityCode || last?.aa?.city || last?.aa?.name || '';
+      if (dC && aC) keys.push(`${dC}-${aC}`.toUpperCase());
+      return keys;
+    });
+
+    const tripFlightIds = [
+      ...segments.map((s) => String(s.FlightId || s.flightId || s.SegmentId || s.segmentId || s.sI || s.id || '')),
+      String(trip?.FlightId || trip?.flightId || '')
+    ].filter(Boolean);
+
+    const tripSegmentIds = [
+      ...segments.map((s) => String(s.SegmentId || s.segmentId || s.FlightId || s.flightId || '')),
+      String(trip?.SegmentId || trip?.segmentId || '')
+    ].filter(Boolean);
+
+    const tripBaggageEntries = baggageEntries.filter(([secKey, bInfo], bIdx) => {
+      const infoSector = typeof bInfo === 'object' && bInfo !== null ? (bInfo?.Sector || bInfo?.sector || bInfo?.Segment || bInfo?.segment || bInfo?.route || '') : '';
+      const sectorCandidate = (secKey && typeof secKey === 'string' && (secKey.includes('-') || secKey.includes('→')))
+        ? secKey
+        : (infoSector && typeof infoSector === 'string' && (infoSector.includes('-') || infoSector.includes('→')) ? infoSector : '');
+
+      if (sectorCandidate) {
+        const cleanSec = sectorCandidate.toUpperCase().replace(/\s+/g, '').replace('→', '-');
+        if (tripSectorKeys.some((sk) => sk === cleanSec || sk.replace('-', '') === cleanSec.replace('-', ''))) {
+          return true;
+        }
+        if (otherTripSectorKeys.some((sk) => sk === cleanSec || sk.replace('-', '') === cleanSec.replace('-', ''))) {
+          return false;
+        }
+      }
+
+      if (typeof bInfo === 'object' && bInfo?.tripIndex !== undefined && bInfo?.tripIndex !== null) {
+        return Number(bInfo.tripIndex) === tripIdx;
+      }
+      if (typeof bInfo === 'object' && bInfo?.isReturn !== undefined) {
+        return bInfo.isReturn ? tripIdx > 0 : tripIdx === 0;
+      }
+      if (baggageEntries.length > 1 && typeof bInfo === 'object' && bInfo?.TripType !== undefined) {
+        return Number(bInfo.TripType) === tripIdx;
+      }
+
+      const rawKey = typeof bInfo === 'object' && bInfo !== null
+        ? (bInfo.FlightId || bInfo.flightId || bInfo.SegmentId || bInfo.segmentId || (!String(bInfo.Key || '').startsWith('0N') && String(bInfo.Key || '').length < 30 ? bInfo.Key : ''))
+        : (!isRawArray && secKey && !secKey.includes('-') && secKey.length < 30 ? secKey : '');
+
+      if (rawKey && String(rawKey).trim() !== '') {
+        const keyToMatch = String(rawKey).trim();
+        if (tripFlightIds.includes(keyToMatch) || tripSegmentIds.includes(keyToMatch)) {
+          return true;
+        }
+      }
+
+      if (!isRawArray && !isNaN(Number(secKey)) && Number(secKey) >= 0 && Number(secKey) < allBookingSegments.length) {
+        return allBookingSegments[Number(secKey)].tripIndex === tripIdx;
+      }
+
+      if (!isMultiTrip) {
+        return true;
+      }
+      return false;
+    });
 
     let extraBaggageStr = '';
-    if (baggageEntries.length > 0) {
-      extraBaggageStr = baggageEntries.map(([, bInfo]) => {
+    if (tripBaggageEntries.length > 0) {
+      extraBaggageStr = tripBaggageEntries.map(([, bInfo]) => {
         const desc = typeof bInfo === 'object' ? (bInfo?.Description || bInfo?.Code) : bInfo;
         return desc ? String(desc).trim() : null;
       }).filter(Boolean).join(', ');
@@ -707,6 +911,9 @@ export function mapBookingDetailToTicket(bookingData, loggedInUser = null, print
       extra: extraBaggageStr || null,
     };
   };
+
+  const extractPassengerMeals = (trav) => extractTripMeals(trav, departureTrip, 0);
+  const extractPassengerBaggage = (trav, trip) => extractTripBaggage(trav, trip || departureTrip, 0);
 
   // Helper to extract passenger seats per trip
   const extractTripSeats = (trip, trav, tripIdx) => {
@@ -754,6 +961,22 @@ export function mapBookingDetailToTicket(bookingData, loggedInUser = null, print
       return '—';
     }
 
+    const otherTrips = (effectiveTrips || []).filter((_, idx) => idx !== tripIdx);
+    const otherTripSectorKeys = otherTrips.flatMap(ot => {
+      const segs = ot?.SegmentList || [];
+      const keys = segs.map(seg => {
+        const d = seg.da?.code || seg.da?.cityCode || seg.da?.city || seg.da?.name || '';
+        const a = seg.aa?.code || seg.aa?.cityCode || seg.aa?.city || seg.aa?.name || '';
+        return `${d}-${a}`.toUpperCase();
+      });
+      const first = segs[0];
+      const last = segs[segs.length - 1];
+      const dC = first?.da?.code || first?.da?.cityCode || first?.da?.city || first?.da?.name || '';
+      const aC = last?.aa?.code || last?.aa?.cityCode || last?.aa?.city || last?.aa?.name || '';
+      if (dC && aC) keys.push(`${dC}-${aC}`.toUpperCase());
+      return keys;
+    });
+
     const tripSeats = seatEntries.filter(([secKey, sInfo], sIdx) => {
       if (typeof sInfo === 'object' && sInfo?.TripType !== undefined) {
         return Number(sInfo.TripType) === tripIdx;
@@ -768,6 +991,9 @@ export function mapBookingDetailToTicket(bookingData, loggedInUser = null, print
         const cleanSec = sectorCandidate.toUpperCase().replace(/\s+/g, '');
         if (tripSectorKeys.some((sk) => sk === cleanSec || sk.replace('-', '') === cleanSec.replace('-', ''))) {
           return true;
+        }
+        if (otherTripSectorKeys.some((sk) => sk === cleanSec || sk.replace('-', '') === cleanSec.replace('-', ''))) {
+          return false;
         }
       }
       if (infoKey || secKey) {
@@ -785,15 +1011,7 @@ export function mapBookingDetailToTicket(bookingData, loggedInUser = null, print
       return false;
     });
 
-    // Fallback: If tripSeats is empty but passenger has multiple seat entries in a multi-trip booking
-    let resolvedSeats = tripSeats;
-    if (resolvedSeats.length === 0 && seatEntries.length > 0) {
-      if (tripInfos.length > 1 && seatEntries[tripIdx]) {
-        resolvedSeats = [seatEntries[tripIdx]];
-      } else if (tripInfos.length === 1 && seatEntries[0]) {
-        resolvedSeats = [seatEntries[0]];
-      }
-    }
+    const resolvedSeats = tripSeats;
 
     if (resolvedSeats.length === 0) {
       if (trav.SeatNo || trav.seat) {
@@ -861,22 +1079,28 @@ export function mapBookingDetailToTicket(bookingData, loggedInUser = null, print
   const passengers = bookingTravellers.map((t, idx) => {
     const travName = `${t.Title || ''} ${t.FirstName || ''} ${t.LastName || ''}`.trim() || `Passenger ${idx + 1}`;
     const travType = formatPaxType(t);
-    const travMeal = extractPassengerMeals(t);
-    const travBaggage = extractPassengerBaggage(t, tripInfos[0] || {});
-    const outboundSeats = extractTripSeats(tripInfos[0], t, 0);
-    const returnSeats = isMultiTrip ? extractTripSeats(tripInfos[1], t, 1) : '—';
+    const departureMeal = extractTripMeals(t, departureTrip, 0);
+    const returnMeal = isMultiTrip && returnTrip ? extractTripMeals(t, returnTrip, 1) : null;
+    const departureBaggage = extractTripBaggage(t, departureTrip, 0);
+    const returnBaggage = isMultiTrip && returnTrip ? extractTripBaggage(t, returnTrip, 1) : null;
+    const outboundSeats = extractTripSeats(departureTrip, t, 0);
+    const returnSeats = isMultiTrip && returnTrip ? extractTripSeats(returnTrip, t, 1) : '—';
 
     return {
       id: idx + 1,
       name: travName,
       type: travType,
-      meal: travMeal,
-      baggage: travBaggage,
+      meal: departureMeal,
+      baggage: departureBaggage,
+      departureMeal,
+      returnMeal,
+      departureBaggage,
+      returnBaggage,
       outboundSeats,
       returnSeats,
       seats: outboundSeats,
       dob: t.DateOfBirth || '—',
-      pnr: resolvePassengerTripPnr(t, tripInfos[0] || {}, 0),
+      pnr: resolvePassengerTripPnr(t, departureTrip || {}, 0),
     };
   });
 
@@ -891,7 +1115,7 @@ export function mapBookingDetailToTicket(bookingData, loggedInUser = null, print
 
   // ─── 3. Flight Segments ─────────────────────────────────────────────────────
   const flightSegments = [];
-  tripInfos.forEach((trip, tIdx) => {
+  effectiveTrips.forEach((trip, tIdx) => {
     const segments = trip.SegmentList || [];
     const tripPriceItem = trip.TotalPriceList?.[0];
 
@@ -970,7 +1194,7 @@ export function mapBookingDetailToTicket(bookingData, loggedInUser = null, print
   });
 
   // Group flight segments by trip journey (Departure vs Return) with connecting flight route support
-  const tripFlightGroups = tripInfos.map((trip, tIdx) => {
+  const tripFlightGroups = effectiveTrips.map((trip, tIdx) => {
     const segments = trip.SegmentList || [];
     const tripPriceItem = trip.TotalPriceList?.[0];
 
@@ -1069,7 +1293,7 @@ export function mapBookingDetailToTicket(bookingData, loggedInUser = null, print
 
   // ─── 4. Ancillary Details ───────────────────────────────────────────────────
   // Compute overall origin -> destination journey route for the booking (e.g. DEL ⇄ GOI)
-  const tripRoutes = tripInfos.map((trip) => {
+  const tripRoutes = effectiveTrips.map((trip) => {
     const segs = trip.SegmentList || [];
     if (segs.length === 0) return '';
     const depCode = segs[0]?.da?.code || segs[0]?.DepartureAirportCode || '';

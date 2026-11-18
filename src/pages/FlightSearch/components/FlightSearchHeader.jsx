@@ -1,7 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import Select, { components } from "react-select";
-import { DayPicker } from "react-day-picker";
-import "react-day-picker/dist/style.css";
+import CustomFlightCalendar from "@/components/common/CustomFlightCalendar";
 import { format, parse, isValid } from "date-fns";
 import { useQuery } from "@tanstack/react-query";
 import { X } from "lucide-react";
@@ -901,20 +900,17 @@ function FlightSearchHeader() {
                 />
 
                 {departOpen && (
-                  <div className="absolute top-full mb-2 bg-white p-4 rounded-2xl shadow-lg z-50">
-                    <DayPicker
-                      mode="single"
+                  <div className="absolute top-full mb-2 z-50">
+                    <CustomFlightCalendar
                       selected={departSelected}
+                      startDate={departSelected}
+                      endDate={flightSearchInfo.return}
                       onSelect={handleDepartSelect}
                       disabled={{
                         before: new Date(),
                         after: flightSearchInfo.return || undefined,
                       }}
                       numberOfMonths={2}
-                      captionLayout="dropdown-buttons"
-                      className="text-gray-800"
-                      classNames={{ months: "flex gap-4" }}
-                      menu
                     />
                   </div>
                 )}
@@ -957,16 +953,14 @@ function FlightSearchHeader() {
                 />
 
                 {returnOpen && (
-                  <div className="absolute top-full -left-15 mb-2 bg-white p-4 rounded-2xl shadow-lg z-50">
-                    <DayPicker
-                      mode="single"
+                  <div className="absolute top-full -left-15 mb-2 z-50">
+                    <CustomFlightCalendar
                       selected={flightSearchInfo.return}
+                      startDate={departSelected}
+                      endDate={flightSearchInfo.return}
                       onSelect={handleReturnSelect}
                       disabled={{ before: departSelected || new Date() }}
                       numberOfMonths={2}
-                      captionLayout="dropdown-buttons"
-                      className="text-gray-800"
-                      classNames={{ months: "flex gap-4" }}
                     />
                   </div>
                 )}
@@ -1103,8 +1097,8 @@ function FlightSearchHeader() {
                                       ${isSelected
                                         ? "bg-[#78080B] text-white font-medium"
                                         : isInfantDisabled
-                                        ? "opacity-30 cursor-not-allowed bg-gray-100 text-gray-400 select-none"
-                                        : "cursor-pointer hover:bg-gray-100 text-gray-800"}`}
+                                          ? "opacity-30 cursor-not-allowed bg-gray-100 text-gray-400 select-none"
+                                          : "cursor-pointer hover:bg-gray-100 text-gray-800"}`}
                                   >
                                     {i}
                                   </div>
@@ -1122,8 +1116,8 @@ function FlightSearchHeader() {
                                     ${isSelected
                                       ? "bg-[#78080B] text-white font-medium"
                                       : isMoreThan6Disabled
-                                      ? "opacity-30 cursor-not-allowed bg-gray-100 text-gray-400 select-none"
-                                      : "cursor-pointer hover:bg-gray-100 text-gray-800"}`}
+                                        ? "opacity-30 cursor-not-allowed bg-gray-100 text-gray-400 select-none"
+                                        : "cursor-pointer hover:bg-gray-100 text-gray-800"}`}
                                 >
                                   &gt;6
                                 </div>

@@ -12,8 +12,7 @@ import Person from '@/assets/vectors/Person.svg';
 import RipSide from '@/assets/imgs/ripSide.webp';
 import BookingFlightFormBg from "@/assets/imgs/bookingForm.webp";
 import { format } from "date-fns";
-import { DayPicker } from "react-day-picker";
-import "react-day-picker/dist/style.css";
+import CustomFlightCalendar from "@/components/common/CustomFlightCalendar";
 import { useQuery } from "@tanstack/react-query";
 import { fetchAirportsByCode } from "@/services/airportsSearch.js";
 import { CoachOptions } from "@/data/ExtraData.js";
@@ -851,16 +850,14 @@ function BookingForm() {
                             />
 
                             {departOpen && (
-                                <div className="absolute scale-[0.90] bottom-15 -left-10 mb-2 bg-white p-4 rounded-2xl shadow-lg z-50">
-                                    <DayPicker
-                                        mode="single"
+                                <div className="absolute scale-[0.90] bottom-15 -left-10 mb-2 z-50">
+                                    <CustomFlightCalendar
                                         selected={departSelected}
+                                        startDate={departSelected}
+                                        endDate={flightSearchInfo.return}
                                         onSelect={handleDepartSelect}
                                         disabled={{ before: new Date(), after: flightSearchInfo.return || undefined }}
                                         numberOfMonths={2}
-                                        captionLayout="dropdown-buttons"
-                                        className="text-gray-800"
-                                        classNames={{ months: "flex gap-4" }}
                                     />
                                 </div>
                             )}
@@ -890,16 +887,14 @@ function BookingForm() {
                             />
 
                             {returnOpen && (
-                                <div className="absolute scale-[0.90] bottom-15 -left-10  mb-2 bg-white p-4 rounded-2xl shadow-lg z-50">
-                                    <DayPicker
-                                        mode="single"
+                                <div className="absolute scale-[0.90] bottom-15 -left-10 mb-2 z-50">
+                                    <CustomFlightCalendar
                                         selected={flightSearchInfo.return}
+                                        startDate={departSelected}
+                                        endDate={flightSearchInfo.return}
                                         onSelect={handleReturnSelect}
                                         disabled={{ before: departSelected || new Date() }}
                                         numberOfMonths={2}
-                                        captionLayout="dropdown-buttons"
-                                        className="text-gray-800"
-                                        classNames={{ months: "flex gap-4" }}
                                     />
                                 </div>
                             )}
